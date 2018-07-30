@@ -7,53 +7,27 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include "../common.h"
 
-static constexpr size_t BUF_LEN = 4096;
+static constexpr size_t kBufLen = 4096;
 
-int main(int argc, char *argv[]) {
-  int srcfd;
-  char buf[BUF_LEN];
-  char *pmemaddr;
+int main() {
+  uint8_t *pbuf;
   size_t mapped_len;
   int is_pmem;
-  ssize_t cc;
 
-  if (argc != 3) {
-    fprintf(stderr, "usage: %s src-file dst-file\n", argv[0]);
-    exit(1);
-  }
+  pbuf = reinterpret_cast<uint8_t *>(
+      pmem_map_file("/mnt/pmem12/src.txt", 0 /* length */, 0 /* flags */, 0666,
+                    &mapped_len, &is_pmem));
 
-  /* open src-file */
-  if ((srcfd = open(argv[1], O_RDONLY)) < 0) {
-    perror(argv[1]);
-    exit(1);
-  }
+  rt_assert(pbuf != nullptr,
+            "pmem_map_file() failed. " + std::string(strerror(errno)));
+  rt_assert(is_pmem == 1, "File is not pmem");
+  printf("mapped length = %zu\n", mapped_len);
 
-  /* create a pmem file and memory map it */
-  if ((pmemaddr = reinterpret_cast<char *>(
-           pmem_map_file(argv[2], BUF_LEN, PMEM_FILE_CREATE | PMEM_FILE_EXCL,
-                         0666, &mapped_len, &is_pmem))) == NULL) {
-    perror("pmem_map_file");
-    exit(1);
-  }
+  pbuf[0] = 'A';
+  pmem_persist(pbuf, 1);
 
-  /* read up to BUF_LEN from srcfd */
-  if ((cc = read(srcfd, buf, BUF_LEN)) < 0) {
-    pmem_unmap(pmemaddr, mapped_len);
-    perror("read");
-    exit(1);
-  }
-
-  /* write it to the pmem */
-  if (is_pmem) {
-    pmem_memcpy_persist(pmemaddr, buf, static_cast<size_t>(cc));
-  } else {
-    memcpy(pmemaddr, buf, static_cast<size_t>(cc));
-    pmem_msync(pmemaddr, static_cast<size_t>(cc));
-  }
-
-  close(srcfd);
-  pmem_unmap(pmemaddr, mapped_len);
-
+  pmem_unmap(pbuf, mapped_len);
   exit(0);
 }
