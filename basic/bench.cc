@@ -1,15 +1,30 @@
 #include <errno.h>
-#include <fcntl.h>
 #include <libpmem.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
+#include <time.h>
 #include "../common.h"
 
-static constexpr size_t kBufLen = 4096;
+static constexpr size_t kFileSizeGB = 64;  // The expected file size
+static constexpr size_t kNumIters = 100000;
+
+void bench_write_lat_byte(uint8_t *pbuf) {
+  struct timespec start, end;
+  clock_gettime(CLOCK_REALTIME, &start);
+
+  for (size_t i = 0; i < kNumIters; i++) {
+    pbuf[0] = 'A';
+    pmem_persist(pbuf, 1);
+  }
+
+  clock_gettime(CLOCK_REALTIME, &end);
+  double tot_ns = (end.tv_sec - start.tv_sec) * 1000000000.0 +
+                  (end.tv_nsec - start.tv_nsec);
+
+  printf("Latency of persistent writes to same byte = %.2f ns\n",
+         tot_ns / kNumIters);
+}
 
 int main() {
   uint8_t *pbuf;
@@ -22,11 +37,11 @@ int main() {
 
   rt_assert(pbuf != nullptr,
             "pmem_map_file() failed. " + std::string(strerror(errno)));
+  rt_assert(mapped_len == kFileSizeGB,
+            "Incorrect file size " + std::to_string(mapped_len));
   rt_assert(is_pmem == 1, "File is not pmem");
-  printf("mapped length = %zu\n", mapped_len);
 
-  pbuf[0] = 'A';
-  pmem_persist(pbuf, 1);
+  bench_write_lat_byte(pbuf);
 
   pmem_unmap(pbuf, mapped_len);
   exit(0);
