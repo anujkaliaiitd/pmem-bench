@@ -69,8 +69,13 @@ static inline size_t rdtsc() {
   return static_cast<size_t>((rdx << 32) | rax);
 }
 
-/// An alias for rdtsc() to distinguish calls on the critical path
-static const auto &dpath_rdtsc = rdtsc;
+static uint64_t rdtscp() {
+  uint64_t rax;
+  uint64_t rdx;
+  uint32_t aux;
+  asm volatile("rdtscp" : "=a"(rax), "=d"(rdx), "=c"(aux) : :);
+  return (rdx << 32) | rax;
+}
 
 static void nano_sleep(size_t ns, double freq_ghz) {
   size_t start = rdtsc();
@@ -149,3 +154,5 @@ static double ns_since(const struct timespec &t0) {
   clock_gettime(CLOCK_REALTIME, &t1);
   return (t1.tv_sec - t0.tv_sec) * 1000000000.0 + (t1.tv_nsec - t0.tv_nsec);
 }
+
+typedef unsigned long long ticks;
