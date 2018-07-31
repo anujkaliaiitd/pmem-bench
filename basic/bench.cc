@@ -1,10 +1,14 @@
 #include <errno.h>
+#include <gflags/gflags.h>
 #include <libpmem.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <thread>
 #include "../common.h"
+
+DEFINE_uint64(num_threads, 0, "Number of threads");
 
 static constexpr size_t kFileSizeGB = 64;  // The expected file size
 static constexpr size_t kNumIters = 10000000;
@@ -28,44 +32,50 @@ void bench_rand_read_lat(uint8_t *pbuf) {
   FastRand rand;
   struct timespec start;
   size_t sum = 0;
-  clock_gettime(CLOCK_REALTIME, &start);
 
-  for (size_t i = 0; i < kNumIters; i++) {
-    // Choose a random dependent byte
-    size_t rand_addr = get_dependent_rand_addr(sum, rand);
-    sum += pbuf[rand_addr];
+  while (true) {
+    clock_gettime(CLOCK_REALTIME, &start);
+
+    for (size_t i = 0; i < kNumIters; i++) {
+      // Choose a random dependent byte
+      size_t rand_addr = get_dependent_rand_addr(sum, rand);
+      sum += pbuf[rand_addr];
+    }
+
+    double tot_ns = ns_since(start);
+    printf("Random read latency = %.2f ns. Sum = %zu\n", tot_ns / kNumIters,
+           sum);
   }
-
-  double tot_ns = ns_since(start);
-  printf("Latency of random reads = %.2f ns. Sum = %zu\n", tot_ns / kNumIters,
-         sum);
 }
 
 /// Tput of random reads
-void bench_rand_read_tput(uint8_t *pbuf) {
+void bench_rand_read_tput(uint8_t *pbuf, size_t thread_id) {
   static constexpr size_t kBatchSize = 10;
   FastRand rand;
   struct timespec start;
   size_t sum = 0;
-  clock_gettime(CLOCK_REALTIME, &start);
 
-  for (size_t i = 0; i < kNumIters / kBatchSize; i++) {
-    // Choose a random dependent byte
-    size_t addrs[kBatchSize];
-    for (size_t i = 0; i < kBatchSize; i++) {
-      addrs[i] = get_independent_rand_addr(rand);
+  while (true) {
+    clock_gettime(CLOCK_REALTIME, &start);
+
+    for (size_t i = 0; i < kNumIters / kBatchSize; i++) {
+      // Choose a random dependent byte
+      size_t addrs[kBatchSize];
+      for (size_t i = 0; i < kBatchSize; i++) {
+        addrs[i] = get_independent_rand_addr(rand);
+      }
+
+      for (size_t i = 0; i < kBatchSize; i++) sum += pbuf[addrs[i]];
     }
 
-    for (size_t i = 0; i < kBatchSize; i++) sum += pbuf[addrs[i]];
+    double tot_sec = sec_since(start);
+    printf("Thread %zu: random read tput = %.1f M/sec. Sum = %zu\n", thread_id,
+           kNumIters / (tot_sec * 1000000), sum);
   }
-
-  double tot_sec = sec_since(start);
-  printf("Tput of random reads = %.1f M/sec. Sum = %zu\n",
-         kNumIters / (tot_sec * 1000000), sum);
 }
 
-/// Latency of random non-persistent writes
-void bench_rand_write_persist_lat(uint8_t *pbuf) {
+/// Latency of random persistent writes
+void bench_rand_write_lat(uint8_t *pbuf) {
   FastRand rand;
   struct timespec start;
   size_t ticks_sum = 0;
@@ -88,7 +98,7 @@ void bench_rand_write_persist_lat(uint8_t *pbuf) {
 }
 
 /// Latency of persisting to the same byte in a file. Useful for timestamps etc.
-void bench_same_byte_write_persist_lat(uint8_t *pbuf) {
+void bench_same_byte_write_lat(uint8_t *pbuf) {
   struct timespec start;
   clock_gettime(CLOCK_REALTIME, &start);
 
@@ -131,7 +141,8 @@ void bench_write_sequential(uint8_t *pbuf) {
   free(dram_src_buf);
 }
 
-int main() {
+int main(int argc, char **argv) {
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
   uint8_t *pbuf;
   size_t mapped_len;
   int is_pmem;
@@ -143,6 +154,7 @@ int main() {
       pmem_map_file("/mnt/pmem12/src.txt", 0 /* length */, 0 /* flags */, 0666,
                     &mapped_len, &is_pmem));
   // pmem_memset_persist(pbuf, 0, mapped_len);  // Map-in the file
+  //  nano_sleep(1000000000, 3.0);  // Assume TSC frequency = 3 GHz
 
   rt_assert(reinterpret_cast<size_t>(pbuf) % 4096 == 0,
             "Mapped buffer isn't page-aligned");
@@ -154,13 +166,20 @@ int main() {
 
   printf("Warming up for around 1 second.\n");
 
-  nano_sleep(1000000000, 3.0);  // Assume TSC frequency = 3 GHz
+  std::vector<std::thread> threads(FLAGS_num_threads);
+  for (size_t i = 0; i < FLAGS_num_threads; i++) {
+    threads[i] = std::thread(bench_rand_read_tput, pbuf, i);
 
-  bench_rand_read_tput(pbuf);
-  bench_rand_read_lat(pbuf);
-  bench_rand_write_persist_lat(pbuf);
-  bench_same_byte_write_persist_lat(pbuf);
-  bench_write_sequential(pbuf);
+    /*
+    bench_rand_read_tput(pbuf);
+    bench_rand_read_lat(pbuf);
+    bench_rand_write_lat(pbuf);
+    bench_same_byte_write_lat(pbuf);
+    bench_write_sequential(pbuf);
+    */
+  }
+
+  for (auto &thread : threads) thread.join();
 
   pmem_unmap(pbuf, mapped_len);
   exit(0);
