@@ -10,8 +10,8 @@
 
 DEFINE_uint64(num_threads, 0, "Number of threads");
 
-static constexpr size_t kFileSizeGB = 64;  // The expected file size
-static constexpr size_t kNumIters = 10000000;
+static constexpr size_t kFileSizeGB = 1024;  // The expected file size
+static constexpr size_t kNumIters = 1000000;
 
 static constexpr size_t kFileSizeBytes = kFileSizeGB * GB(1);
 
@@ -28,7 +28,7 @@ size_t get_independent_rand_addr(FastRand &rand) {
 }
 
 /// Latency of random reads
-void bench_rand_read_lat(uint8_t *pbuf) {
+void bench_rand_read_lat(uint8_t *pbuf, size_t thread_id) {
   FastRand rand;
   struct timespec start;
   size_t sum = 0;
@@ -43,8 +43,8 @@ void bench_rand_read_lat(uint8_t *pbuf) {
     }
 
     double tot_ns = ns_since(start);
-    printf("Random read latency = %.2f ns. Sum = %zu\n", tot_ns / kNumIters,
-           sum);
+    printf("Thread %zu: Random read latency = %.2f ns. Sum = %zu\n", thread_id,
+           tot_ns / kNumIters, sum);
   }
 }
 
@@ -153,26 +153,32 @@ int main(int argc, char **argv) {
   pbuf = reinterpret_cast<uint8_t *>(
       pmem_map_file("/mnt/pmem12/src.txt", 0 /* length */, 0 /* flags */, 0666,
                     &mapped_len, &is_pmem));
-  // pmem_memset_persist(pbuf, 0, mapped_len);  // Map-in the file
+
+  /*
+  printf("Writing to the whole file...\n");
+  pmem_memset_persist(pbuf, 3185, mapped_len);  // Map-in the file
+  printf("Done writing.\n");
+  */
+
   //  nano_sleep(1000000000, 3.0);  // Assume TSC frequency = 3 GHz
 
-  rt_assert(reinterpret_cast<size_t>(pbuf) % 4096 == 0,
-            "Mapped buffer isn't page-aligned");
   rt_assert(pbuf != nullptr,
             "pmem_map_file() failed. " + std::string(strerror(errno)));
   rt_assert(mapped_len == kFileSizeGB * GB(1),
             "Incorrect file size " + std::to_string(mapped_len));
+  rt_assert(reinterpret_cast<size_t>(pbuf) % 4096 == 0,
+            "Mapped buffer isn't page-aligned");
   rt_assert(is_pmem == 1, "File is not pmem");
 
   printf("Warming up for around 1 second.\n");
 
   std::vector<std::thread> threads(FLAGS_num_threads);
   for (size_t i = 0; i < FLAGS_num_threads; i++) {
-    threads[i] = std::thread(bench_rand_read_tput, pbuf, i);
+    threads[i] = std::thread(bench_rand_read_lat, pbuf, i);
+    // threads[i] = std::thread(bench_rand_read_tput, pbuf, i);
 
     /*
     bench_rand_read_tput(pbuf);
-    bench_rand_read_lat(pbuf);
     bench_rand_write_lat(pbuf);
     bench_same_byte_write_lat(pbuf);
     bench_write_sequential(pbuf);

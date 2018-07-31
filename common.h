@@ -9,6 +9,7 @@
 #define KB(x) (static_cast<size_t>(x) << 10)
 #define MB(x) (static_cast<size_t>(x) << 20)
 #define GB(x) (static_cast<size_t>(x) << 30)
+#define TB(x) (static_cast<size_t>(x) << 40)
 
 static void memory_barrier() { asm volatile("" ::: "memory"); }
 static void lfence() { asm volatile("lfence" ::: "memory"); }
