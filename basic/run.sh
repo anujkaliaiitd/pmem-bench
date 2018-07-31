@@ -1,1 +1,1 @@
-numactl --cpunodebind=0 --membind=0 ./bench
+numactl --physcpubind=2 --membind=0 ./bench
