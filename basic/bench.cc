@@ -14,6 +14,7 @@ DEFINE_uint64(num_threads, 0, "Number of threads");
 static constexpr size_t kFileSizeGB = 1024;  // The expected file size
 static constexpr size_t kFileSizeBytes = kFileSizeGB * GB(1);
 double tsc_freq = 0.0;
+static size_t align64(size_t x) { return x - x % 64; }
 
 /// Latency of random reads
 void bench_rand_read_lat(uint8_t *pbuf, size_t thread_id) {
@@ -51,10 +52,11 @@ void bench_rand_read_tput(uint8_t *pbuf, size_t thread_id) {
     clock_gettime(CLOCK_REALTIME, &start);
 
     for (size_t i = 0; i < kNumIters / kBatchSize; i++) {
-      // Choose a random dependent byte
-      size_t addrs[kBatchSize];
-      for (size_t i = 0; i < kBatchSize; i++) addrs[i] = pcg() % kFileSizeBytes;
-      for (size_t i = 0; i < kBatchSize; i++) sum += pbuf[addrs[i]];
+      size_t offset[kBatchSize];
+      for (size_t j = 0; j < kBatchSize; j++) {
+        offset[j] = pcg() % kFileSizeBytes;
+      }
+      for (size_t j = 0; j < kBatchSize; j++) sum += pbuf[offset[j]];
     }
 
     double tot_sec = sec_since(start);
@@ -63,28 +65,58 @@ void bench_rand_read_tput(uint8_t *pbuf, size_t thread_id) {
   }
 }
 
-/// Latency of random persistent writes
-void bench_rand_write_lat(uint8_t *pbuf, size_t thread_id) {
-  static constexpr size_t kNumIters = MB(2);
+/// Throughput of random batched persistent writes
+void bench_rand_write_tput(uint8_t *pbuf, size_t thread_id) {
+  static constexpr size_t kBatchSize = 10;
+  static constexpr size_t kNumIters = MB(4);
+
+  // Write to non-overlapping addresses
+  const size_t bytes_per_thread = kFileSizeBytes / FLAGS_num_threads;
+  const size_t base_addr = thread_id * bytes_per_thread;
+
   pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
   struct timespec start;
-  size_t ticks_sum = 0;
 
   while (true) {
     clock_gettime(CLOCK_REALTIME, &start);
 
+    for (size_t i = 0; i < kNumIters / kBatchSize; i++) {
+      size_t offset[kBatchSize];
+      for (size_t j = 0; j < kBatchSize; j++) {
+        offset[j] = base_addr + (pcg() % bytes_per_thread);
+        offset[j] = align64(offset[j]);
+        pmem_memset_nodrain(&pbuf[offset[j]], i + j, 64);
+      }
+
+      pmem_drain();
+    }
+
+    double tot_sec = sec_since(start);
+    double cacheline_rate = kNumIters / tot_sec;
+    printf("Thread %zu: random write tput = %.2f M/sec, %.2f GB/s\n", thread_id,
+           cacheline_rate / 1000000, (cacheline_rate * 64) / 1000000000);
+  }
+}
+
+/// Latency of random persistent writes
+void bench_rand_write_lat(uint8_t *pbuf, size_t thread_id) {
+  static constexpr size_t kNumIters = MB(2);
+  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
+
+  // Write to non-overlapping addresses
+  const size_t bytes_per_thread = kFileSizeBytes / FLAGS_num_threads;
+  const size_t base_addr = thread_id * bytes_per_thread;
+
+  while (true) {
+    size_t ticks_sum = 0;
     for (size_t i = 0; i < kNumIters; i++) {
       size_t ticks_st = rdtsc();
-      pmem_memset_persist(&pbuf[pcg() % kFileSizeBytes], i, 64);
+      pmem_memset_persist(&pbuf[base_addr + (pcg() % bytes_per_thread)], i, 64);
       ticks_sum += (rdtscp() - ticks_st);
     }
 
-    double tot_ns = ns_since(start);
-    printf(
-        "Thread %zu: Inverse throughput of persistent rand writes = %.2f ns. "
-        "Bandwidth = %.2f GB. Average ticks = %zu\n",
-        thread_id, tot_ns / kNumIters, (kNumIters * 64) / tot_ns,
-        ticks_sum / kNumIters);
+    printf("Thread %zu: Latency of persistent rand writes = %.2f ns.\n",
+           thread_id, ticks_sum / (kNumIters * tsc_freq));
   }
 }
 
@@ -169,7 +201,8 @@ int main(int argc, char **argv) {
   for (size_t i = 0; i < FLAGS_num_threads; i++) {
     // threads[i] = std::thread(bench_rand_read_lat, pbuf, i);
     // threads[i] = std::thread(bench_rand_read_tput, pbuf, i);
-    threads[i] = std::thread(bench_rand_write_lat, pbuf, i);
+    // threads[i] = std::thread(bench_rand_write_lat, pbuf, i);
+    threads[i] = std::thread(bench_rand_write_tput, pbuf, i);
 
     /*
     bench_rand_read_tput(pbuf);
