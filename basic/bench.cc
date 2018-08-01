@@ -138,29 +138,29 @@ void bench_same_byte_write_lat(uint8_t *pbuf) {
 }
 
 /// Bandwidth of large writes
-void bench_write_sequential(uint8_t *pbuf) {
-  void *dram_src_buf = malloc(kFileSizeBytes);
-  rt_assert(dram_src_buf != nullptr);
-  memset(dram_src_buf, 0, kFileSizeBytes);  // Map-in the buffer
+void bench_write_sequential(uint8_t *pbuf, size_t thread_id) {
+  static constexpr size_t kCopySize = MB(256);
+  void *dram_src_buf = malloc(kCopySize);
+  memset(dram_src_buf, 0, kCopySize);
 
-  for (size_t copy_GB = 1; copy_GB <= 8; copy_GB *= 2) {
+  // Write to non-overlapping addresses
+  const size_t bytes_per_thread = kFileSizeBytes / FLAGS_num_threads;
+  const size_t base_addr = thread_id * bytes_per_thread;
+  size_t cur_base = base_addr;
+
+  while (true) {
     struct timespec start;
     clock_gettime(CLOCK_REALTIME, &start);
-    pmem_memcpy_persist(pbuf, dram_src_buf, copy_GB * GB(1));
+    pmem_memcpy_persist(&pbuf[cur_base], dram_src_buf, kCopySize);
+
+    cur_base += kCopySize;
+    if (cur_base + kCopySize >= base_addr + bytes_per_thread) {
+      cur_base = base_addr;
+    }
 
     double tot_sec = sec_since(start);
-    printf("Bandwidth of persistent writes (%zu GB) = %.2f GB/s\n", copy_GB,
-           copy_GB / tot_sec);
-  }
-
-  for (size_t copy_GB = 1; copy_GB <= 8; copy_GB *= 2) {
-    struct timespec start;
-    clock_gettime(CLOCK_REALTIME, &start);
-    pmem_memcpy_persist(pbuf, dram_src_buf, copy_GB * GB(1));
-
-    double tot_sec = sec_since(start);
-    printf("Bandwidth of persistent writes (%zu GB) = %.2f GB/s\n", copy_GB,
-           copy_GB / tot_sec);
+    printf("Thread %zu: Bandwidth of persistent writes (%.3f GB) = %.2f GB/s\n",
+           thread_id, kCopySize * 1.0 / GB(1), kCopySize / (tot_sec * GB(1)));
   }
 
   free(dram_src_buf);
@@ -202,7 +202,8 @@ int main(int argc, char **argv) {
     // threads[i] = std::thread(bench_rand_read_lat, pbuf, i);
     // threads[i] = std::thread(bench_rand_read_tput, pbuf, i);
     // threads[i] = std::thread(bench_rand_write_lat, pbuf, i);
-    threads[i] = std::thread(bench_rand_write_tput, pbuf, i);
+    // threads[i] = std::thread(bench_rand_write_tput, pbuf, i);
+    threads[i] = std::thread(bench_write_sequential, pbuf, i);
 
     /*
     bench_rand_read_tput(pbuf);
