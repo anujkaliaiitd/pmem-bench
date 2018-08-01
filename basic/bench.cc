@@ -5,31 +5,21 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <pcg/pcg_random.hpp>
 #include <thread>
 #include "../common.h"
 
 DEFINE_uint64(num_threads, 0, "Number of threads");
 
 static constexpr size_t kFileSizeGB = 1024;  // The expected file size
-static constexpr size_t kNumIters = 1000000;
-
 static constexpr size_t kFileSizeBytes = kFileSizeGB * GB(1);
-
 double tsc_freq = 0.0;
-
-size_t get_dependent_rand_addr(size_t sum, FastRand &rand) {
-  size_t rand_addr = ((sum % 8) + static_cast<size_t>(rand.next_u32())) * 64;
-  return rand_addr % kFileSizeBytes;
-}
-
-size_t get_independent_rand_addr(FastRand &rand) {
-  size_t rand_addr = static_cast<size_t>(rand.next_u32()) * 64;
-  return rand_addr % kFileSizeBytes;
-}
 
 /// Latency of random reads
 void bench_rand_read_lat(uint8_t *pbuf, size_t thread_id) {
-  FastRand rand;
+  static constexpr size_t kNumIters = MB(1);
+
+  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
   struct timespec start;
   size_t sum = 0;
 
@@ -38,7 +28,7 @@ void bench_rand_read_lat(uint8_t *pbuf, size_t thread_id) {
 
     for (size_t i = 0; i < kNumIters; i++) {
       // Choose a random dependent byte
-      size_t rand_addr = get_dependent_rand_addr(sum, rand);
+      size_t rand_addr = (pcg() + sum % 8) % kFileSizeBytes;
       sum += pbuf[rand_addr];
     }
 
@@ -51,7 +41,9 @@ void bench_rand_read_lat(uint8_t *pbuf, size_t thread_id) {
 /// Tput of random reads
 void bench_rand_read_tput(uint8_t *pbuf, size_t thread_id) {
   static constexpr size_t kBatchSize = 10;
-  FastRand rand;
+  static constexpr size_t kNumIters = MB(4);
+
+  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
   struct timespec start;
   size_t sum = 0;
 
@@ -61,44 +53,45 @@ void bench_rand_read_tput(uint8_t *pbuf, size_t thread_id) {
     for (size_t i = 0; i < kNumIters / kBatchSize; i++) {
       // Choose a random dependent byte
       size_t addrs[kBatchSize];
-      for (size_t i = 0; i < kBatchSize; i++) {
-        addrs[i] = get_independent_rand_addr(rand);
-      }
-
+      for (size_t i = 0; i < kBatchSize; i++) addrs[i] = pcg() % kFileSizeBytes;
       for (size_t i = 0; i < kBatchSize; i++) sum += pbuf[addrs[i]];
     }
 
     double tot_sec = sec_since(start);
-    printf("Thread %zu: random read tput = %.1f M/sec. Sum = %zu\n", thread_id,
+    printf("Thread %zu: random read tput = %.2f M/sec. Sum = %zu\n", thread_id,
            kNumIters / (tot_sec * 1000000), sum);
   }
 }
 
 /// Latency of random persistent writes
-void bench_rand_write_lat(uint8_t *pbuf) {
-  FastRand rand;
+void bench_rand_write_lat(uint8_t *pbuf, size_t thread_id) {
+  static constexpr size_t kNumIters = MB(2);
+  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
   struct timespec start;
   size_t ticks_sum = 0;
-  clock_gettime(CLOCK_REALTIME, &start);
 
-  for (size_t i = 0; i < kNumIters; i++) {
-    size_t ticks_st = rdtsc();
+  while (true) {
+    clock_gettime(CLOCK_REALTIME, &start);
 
-    size_t rand_addr = get_independent_rand_addr(rand);
-    pmem_memset_persist(&pbuf[rand_addr], i, 64);
+    for (size_t i = 0; i < kNumIters; i++) {
+      size_t ticks_st = rdtsc();
+      pmem_memset_persist(&pbuf[pcg() % kFileSizeBytes], i, 64);
+      ticks_sum += (rdtscp() - ticks_st);
+    }
 
-    ticks_sum += (rdtscp() - ticks_st);
+    double tot_ns = ns_since(start);
+    printf(
+        "Thread %zu: Inverse throughput of persistent rand writes = %.2f ns. "
+        "Bandwidth = %.2f GB. Average ticks = %zu\n",
+        thread_id, tot_ns / kNumIters, (kNumIters * 64) / tot_ns,
+        ticks_sum / kNumIters);
   }
-
-  double tot_ns = ns_since(start);
-  printf(
-      "Inverse throughput of persistent rand writes = %.2f ns. "
-      "Bandwidth = %.2f GB. Average ticks = %zu\n",
-      tot_ns / kNumIters, (kNumIters * 64) / tot_ns, ticks_sum / kNumIters);
 }
 
 /// Latency of persisting to the same byte in a file. Useful for timestamps etc.
 void bench_same_byte_write_lat(uint8_t *pbuf) {
+  static constexpr size_t kNumIters = MB(1);
+
   struct timespec start;
   clock_gettime(CLOCK_REALTIME, &start);
 
@@ -174,12 +167,12 @@ int main(int argc, char **argv) {
 
   std::vector<std::thread> threads(FLAGS_num_threads);
   for (size_t i = 0; i < FLAGS_num_threads; i++) {
-    threads[i] = std::thread(bench_rand_read_lat, pbuf, i);
+    // threads[i] = std::thread(bench_rand_read_lat, pbuf, i);
     // threads[i] = std::thread(bench_rand_read_tput, pbuf, i);
+    threads[i] = std::thread(bench_rand_write_lat, pbuf, i);
 
     /*
     bench_rand_read_tput(pbuf);
-    bench_rand_write_lat(pbuf);
     bench_same_byte_write_lat(pbuf);
     bench_write_sequential(pbuf);
     */
