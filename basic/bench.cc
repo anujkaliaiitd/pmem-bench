@@ -11,10 +11,21 @@
 
 DEFINE_uint64(num_threads, 0, "Number of threads");
 
-static constexpr size_t kFileSizeGB = 1024;  // The expected file size
+static constexpr size_t kFileSizeGB = 512;  // The expected file size
 static constexpr size_t kFileSizeBytes = kFileSizeGB * GB(1);
 double tsc_freq = 0.0;
 static size_t align64(size_t x) { return x - x % 64; }
+
+/// Get a random offset in the file with at least \p space after it
+size_t get_random_offset_with_space(pcg64_fast &pcg, size_t space) {
+  size_t iters = 0;
+  while (true) {
+    size_t rand_offset = pcg() % kFileSizeBytes;
+    if (kFileSizeBytes - rand_offset > space) return rand_offset;
+    iters++;
+    if (iters > 2) printf("Random offset took over 2 iters\n");
+  }
+}
 
 /// Latency of random reads
 void bench_rand_read_lat(uint8_t *pbuf, size_t thread_id) {
@@ -166,6 +177,65 @@ void bench_write_sequential(uint8_t *pbuf, size_t thread_id) {
   free(dram_src_buf);
 }
 
+/// Compare the time to write a contiguous "block" (256 bytes) of pmem, to
+/// to the time to write to discontiguous but smaller cache-line chunks.
+void bench_write_block_size(uint8_t *pbuf, size_t) {
+  // Single-threaded for now
+  static constexpr size_t kAEPBlockSize = 256;
+  static constexpr size_t kNumSplits = 4;
+  static constexpr size_t kIters = 1000000;
+  void *dram_src_buf = malloc(kAEPBlockSize);
+  memset(dram_src_buf, 0, kAEPBlockSize);
+
+  struct timespec start;
+
+  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
+
+  while (true) {
+    {
+      // One contiguous write
+      clock_gettime(CLOCK_REALTIME, &start);
+      size_t cur_base =
+          get_random_offset_with_space(pcg, kAEPBlockSize * kIters);
+      for (size_t i = 0; i < kIters; i++) {
+        pmem_memcpy_persist(&pbuf[cur_base], dram_src_buf, kAEPBlockSize);
+        cur_base += kAEPBlockSize;
+      }
+
+      double tot_nsec = ns_since(start);
+      printf("Time per contiguous write = %.2f ns\n", tot_nsec / kIters);
+    }
+
+    {
+      // Multiple discontigous writes
+      static constexpr size_t kSplitCopySz = kAEPBlockSize / kNumSplits;
+      clock_gettime(CLOCK_REALTIME, &start);
+
+      // Assign bases to each writer
+      size_t cur_base[kNumSplits];
+      size_t starting_base =
+          get_random_offset_with_space(pcg, kAEPBlockSize * kIters);
+      for (size_t j = 0; j < kNumSplits; j++) {
+        cur_base[j] = starting_base + (j * kSplitCopySz);
+      }
+
+      for (size_t i = 0; i < kIters; i++) {
+        for (size_t j = 0; j < kNumSplits; j++) {
+          pmem_memcpy_nodrain(&pbuf[cur_base[j]], dram_src_buf, kSplitCopySz);
+          cur_base[j] += kSplitCopySz;
+        }
+        pmem_drain();
+      }
+
+      double tot_nsec = ns_since(start);
+      printf("Time per %zu discontiguous writes = %.2f ns\n", kNumSplits,
+             tot_nsec / kIters);
+    }
+  }
+
+  free(dram_src_buf);
+}
+
 int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   uint8_t *pbuf;
@@ -176,7 +246,7 @@ int main(int argc, char **argv) {
   printf("RDTSC frequency = %.2f GHz\n", tsc_freq);
 
   pbuf = reinterpret_cast<uint8_t *>(
-      pmem_map_file("/mnt/pmem12/src.txt", 0 /* length */, 0 /* flags */, 0666,
+      pmem_map_file("/mnt/pmem12/raft_log", 0 /* length */, 0 /* flags */, 0666,
                     &mapped_len, &is_pmem));
 
   /*
@@ -203,13 +273,8 @@ int main(int argc, char **argv) {
     // threads[i] = std::thread(bench_rand_read_tput, pbuf, i);
     // threads[i] = std::thread(bench_rand_write_lat, pbuf, i);
     // threads[i] = std::thread(bench_rand_write_tput, pbuf, i);
-    threads[i] = std::thread(bench_write_sequential, pbuf, i);
-
-    /*
-    bench_rand_read_tput(pbuf);
-    bench_same_byte_write_lat(pbuf);
-    bench_write_sequential(pbuf);
-    */
+    // threads[i] = std::thread(bench_write_sequential, pbuf, i);
+    threads[i] = std::thread(bench_write_block_size, pbuf, i);
   }
 
   for (auto &thread : threads) thread.join();
