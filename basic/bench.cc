@@ -231,6 +231,23 @@ void bench_write_block_size(uint8_t *pbuf, size_t) {
       printf("Time per %zu discontiguous writes = %.2f ns\n", kNumSplits,
              tot_nsec / kIters);
     }
+
+    {
+      // Try random writes just for funsies
+      clock_gettime(CLOCK_REALTIME, &start);
+
+      for (size_t i = 0; i < kIters; i++) {
+        for (size_t j = 0; j < kNumSplits; j++) {
+          size_t off = get_random_offset_with_space(pcg, 64);
+          pmem_memcpy_nodrain(&pbuf[off], dram_src_buf, 64);
+        }
+        pmem_drain();
+      }
+
+      double tot_nsec = ns_since(start);
+      printf("Time per %zu random writes = %.2f ns\n", kNumSplits,
+             tot_nsec / kIters);
+    }
   }
 
   free(dram_src_buf);
