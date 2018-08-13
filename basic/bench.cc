@@ -236,6 +236,44 @@ void bench_write_block_size(uint8_t *pbuf, size_t) {
   free(dram_src_buf);
 }
 
+// Write to the whole file to "map it in", whatever that means
+void map_in_file_whole(uint8_t *pbuf, size_t mapped_len) {
+  printf("Writing to the whole file for map-in...\n");
+  const size_t chunk_sz = GB(16);
+  rt_assert(mapped_len % chunk_sz == 0, "Invalid chunk size for map-in");
+
+  for (size_t i = 0; i < mapped_len; i += chunk_sz) {
+    struct timespec start;
+    clock_gettime(CLOCK_REALTIME, &start);
+    pmem_memset_persist(&pbuf[i], 3185, chunk_sz);  // nodrain performs similar
+    printf("Fraction complete = %.2f. Took %.3f sec for %zu GB.\n",
+           (i + 1) * 1.0 / mapped_len, sec_since(start), chunk_sz / GB(1));
+  }
+
+  printf("Done writing.\n");
+}
+
+// Write to a byte in each page of the file, to map the pages in
+void map_in_file_by_page(uint8_t *pbuf, size_t mapped_len) {
+  printf("Mapping-in file pages.\n");
+  const size_t chunk_sz = GB(16);
+  rt_assert(mapped_len % chunk_sz == 0, "Invalid chunk size for map-in");
+
+  struct timespec start;
+  clock_gettime(CLOCK_REALTIME, &start);
+
+  for (size_t i = 0; i < mapped_len; i += KB(4)) {
+    pmem_memset_nodrain(&pbuf[i], 3185, 1);
+    if (i % GB(32) == 0 && i > 0) {
+      printf("Fraction complete = %.2f. Took %.3f sec for %zu GB.\n",
+             (i + 1) * 1.0 / mapped_len, sec_since(start), chunk_sz / GB(1));
+      clock_gettime(CLOCK_REALTIME, &start);
+    }
+  }
+
+  printf("Done mapping-in.\n");
+}
+
 int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   uint8_t *pbuf;
@@ -249,14 +287,6 @@ int main(int argc, char **argv) {
       pmem_map_file("/mnt/pmem12/raft_log", 0 /* length */, 0 /* flags */, 0666,
                     &mapped_len, &is_pmem));
 
-  /*
-  printf("Writing to the whole file...\n");
-  pmem_memset_persist(pbuf, 3185, mapped_len);  // Map-in the file
-  printf("Done writing.\n");
-  */
-
-  //  nano_sleep(1000000000, 3.0);  // Assume TSC frequency = 3 GHz
-
   rt_assert(pbuf != nullptr,
             "pmem_map_file() failed. " + std::string(strerror(errno)));
   rt_assert(mapped_len == kFileSizeGB * GB(1),
@@ -264,6 +294,11 @@ int main(int argc, char **argv) {
   rt_assert(reinterpret_cast<size_t>(pbuf) % 4096 == 0,
             "Mapped buffer isn't page-aligned");
   rt_assert(is_pmem == 1, "File is not pmem");
+
+  // map_in_file_by_page(pbuf, mapped_len);
+  // map_in_file_whole(pbuf, mapped_len);
+
+  //  nano_sleep(1000000000, 3.0);  // Assume TSC frequency = 3 GHz
 
   printf("Warming up for around 1 second.\n");
 
