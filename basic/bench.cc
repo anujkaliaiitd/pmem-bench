@@ -211,12 +211,14 @@ void bench_write_block_size(uint8_t *pbuf, size_t) {
       static constexpr size_t kSplitCopySz = kAEPBlockSize / kNumSplits;
       clock_gettime(CLOCK_REALTIME, &start);
 
-      // Assign bases to each writer
+      // Assign bases to each writer. We will write to a buffer of size
+      // (kAEPBlockSize * kIters). This buffer is split into kNumSplits chunks,
+      // one per writer.
       size_t cur_base[kNumSplits];
       size_t starting_base =
           get_random_offset_with_space(pcg, kAEPBlockSize * kIters);
       for (size_t j = 0; j < kNumSplits; j++) {
-        cur_base[j] = starting_base + (j * kSplitCopySz);
+        cur_base[j] = starting_base + j * (kSplitCopySz * kIters);
       }
 
       for (size_t i = 0; i < kIters; i++) {
