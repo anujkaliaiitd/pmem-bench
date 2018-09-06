@@ -13,7 +13,7 @@ DEFINE_uint64(num_threads, 0, "Number of threads");
 
 static constexpr size_t kFileSizeGB = 512;  // The expected file size
 static constexpr size_t kFileSizeBytes = kFileSizeGB * GB(1);
-double tsc_freq = 0.0;
+double freq_ghz = 0.0;
 static size_t align64(size_t x) { return x - x % 64; }
 
 /// Get a random offset in the file with at least \p space after it
@@ -127,7 +127,7 @@ void bench_rand_write_lat(uint8_t *pbuf, size_t thread_id) {
     }
 
     printf("Thread %zu: Latency of persistent rand writes = %.2f ns.\n",
-           thread_id, ticks_sum / (kNumIters * tsc_freq));
+           thread_id, ticks_sum / (kNumIters * freq_ghz));
   }
 }
 
@@ -255,6 +255,28 @@ void bench_write_block_size(uint8_t *pbuf, size_t) {
   free(dram_src_buf);
 }
 
+/// Latency of low load sequential writes
+void bench_low_load_sequential_writes(uint8_t *pbuf, size_t) {
+  static constexpr size_t kNumIters = MB(1);
+  static constexpr size_t kWriteSize = 128;
+  uint8_t buf[kWriteSize];
+  size_t tot_ns = 0;
+
+  while (true) {
+    for (size_t i = 0; i < kNumIters; i++) {
+      size_t start = rdtsc();
+      pmem_memcpy_persist(&pbuf[i * kWriteSize], buf, kWriteSize);
+      tot_ns += to_nsec(rdtscp() - start, freq_ghz);
+
+      nano_sleep(1000, freq_ghz);
+    }
+
+    printf("Latency of unloaded persistent sequential writes = %zu ns\n",
+           tot_ns / kNumIters);
+    tot_ns = 0;
+  }
+}
+
 // Write to the whole file to "map it in", whatever that means
 void map_in_file_whole(uint8_t *pbuf, size_t mapped_len) {
   printf("Writing to the whole file for map-in...\n");
@@ -299,8 +321,8 @@ int main(int argc, char **argv) {
   size_t mapped_len;
   int is_pmem;
 
-  tsc_freq = measure_rdtsc_freq();
-  printf("RDTSC frequency = %.2f GHz\n", tsc_freq);
+  freq_ghz = measure_rdtsc_freq();
+  printf("RDTSC frequency = %.2f GHz\n", freq_ghz);
 
   pbuf = reinterpret_cast<uint8_t *>(
       pmem_map_file("/mnt/pmem12/raft_log", 0 /* length */, 0 /* flags */, 0666,
@@ -328,7 +350,8 @@ int main(int argc, char **argv) {
     // threads[i] = std::thread(bench_rand_write_lat, pbuf, i);
     // threads[i] = std::thread(bench_rand_write_tput, pbuf, i);
     // threads[i] = std::thread(bench_write_sequential, pbuf, i);
-    threads[i] = std::thread(bench_write_block_size, pbuf, i);
+    // threads[i] = std::thread(bench_write_block_size, pbuf, i);
+    threads[i] = std::thread(bench_low_load_sequential_writes, pbuf, i);
   }
 
   for (auto &thread : threads) thread.join();
