@@ -11,7 +11,7 @@
 
 DEFINE_uint64(num_threads, 0, "Number of threads");
 
-static constexpr size_t kFileSizeGB = 512;  // The expected file size
+static constexpr size_t kFileSizeGB = 256;  // The expected file size
 static constexpr size_t kFileSizeBytes = kFileSizeGB * GB(1);
 double freq_ghz = 0.0;
 static size_t align64(size_t x) { return x - x % 64; }

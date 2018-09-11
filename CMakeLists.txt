@@ -13,7 +13,7 @@ add_definitions(-Wno-unused-function)
 add_definitions(-march=native)
 add_definitions(-g)
 
-set(LIBRARIES ${LIBRARIES} rt numa ibverbs pthread gflags memcached pmem)
+set(LIBRARIES ${LIBRARIES} rt numa ibverbs pthread gflags memcached pmem hdr_histogram_static)
 
 include_directories(${CMAKE_SOURCE_DIR})
 
@@ -76,7 +76,8 @@ set(HRD_SOURCES
   libhrd_cpp/hrd_util.cc)
 
 set(BENCHMARKS
-  write-flush)
+  write-flush
+  microbench)
 
 foreach(bench IN LISTS BENCHMARKS)
   add_executable(${bench} ${bench}/main.cc ${HRD_SOURCES})
