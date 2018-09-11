@@ -182,3 +182,29 @@ class HdrHistogramAmp {
  private:
   hdr_histogram *hist = nullptr;
 };
+
+// A conveinince wrapper for hdr_histogram
+class HdrHistogram {
+ public:
+  HdrHistogram(int64_t min, int64_t max, int precision) {
+    int ret = hdr_init(min, max, precision, &hist);
+    rt_assert(ret == 0);
+  }
+
+  ~HdrHistogram() { hdr_close(hist); }
+
+  inline void record_value(size_t v) {
+    hdr_record_value(hist, static_cast<int64_t>(v));
+  }
+
+  size_t percentile(double p) {
+    return static_cast<size_t>(hdr_value_at_percentile(hist, p));
+  }
+
+  void reset() { hdr_reset(hist); }
+
+  hdr_histogram *get_raw_hist() { return hist; }
+
+ private:
+  hdr_histogram *hist = nullptr;
+};
