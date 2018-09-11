@@ -124,18 +124,23 @@ struct hrd_ctrl_blk_t* hrd_ctrl_blk_init(size_t local_hid, size_t port_index,
     hrd_create_conn_qps(cb);
 
     if (conn_config->prealloc_buf == nullptr) {
-      // Create and register conn_buf - always make it multiple of 2 MB
+      // Create a conn buf for the user
       size_t reg_size = 0;
 
-      // If numa_node is invalid, use standard heap
-      if (numa_node != kHrdInvalidNUMANode) {
-        // Hugepages
+      if (kHrdUsePmemConnBuf) {
+        rt_assert(numa_node == 0, "Pmem support only for NUMA 0 for now");
+        reg_size = cb->conn_config.buf_size;
+        cb->conn_buf =
+            reinterpret_cast<volatile uint8_t*>(hrd_malloc_pmem(reg_size));
+      } else if (numa_node != kHrdInvalidNUMANode) {
+        // DRAM hugepages
         while (reg_size < cb->conn_config.buf_size) reg_size += MB(2);
 
         assert(cb->conn_config.buf_shm_key >= 1);  // SHM key 0 is used by OS
         cb->conn_buf = reinterpret_cast<volatile uint8_t*>(hrd_malloc_socket(
             cb->conn_config.buf_shm_key, reg_size, numa_node));
       } else {
+        // If numa_node is invalid, use standard heap
         reg_size = cb->conn_config.buf_size;
         cb->conn_buf =
             reinterpret_cast<volatile uint8_t*>(memalign(4096, reg_size));
@@ -144,7 +149,10 @@ struct hrd_ctrl_blk_t* hrd_ctrl_blk_init(size_t local_hid, size_t port_index,
       memset(const_cast<uint8_t*>(cb->conn_buf), 0, reg_size);
       cb->conn_buf_mr = ibv_reg_mr(cb->pd, const_cast<uint8_t*>(cb->conn_buf),
                                    reg_size, ib_flags);
-      assert(cb->conn_buf_mr != nullptr);
+      if (cb->conn_buf_mr == nullptr) {
+        printf("Buffer reg failed with code %s\n", strerror(errno));
+        exit(-1);
+      }
     } else {
       cb->conn_buf = const_cast<volatile uint8_t*>(conn_config->prealloc_buf);
       cb->conn_buf_mr = ibv_reg_mr(cb->pd, const_cast<uint8_t*>(cb->conn_buf),

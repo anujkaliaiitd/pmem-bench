@@ -13,7 +13,7 @@ add_definitions(-Wno-unused-function)
 add_definitions(-march=native)
 add_definitions(-g)
 
-set(LIBRARIES ${LIBRARIES} rt numa ibverbs pthread gflags memcached)
+set(LIBRARIES ${LIBRARIES} rt numa ibverbs pthread gflags memcached pmem)
 
 include_directories(${CMAKE_SOURCE_DIR})
 

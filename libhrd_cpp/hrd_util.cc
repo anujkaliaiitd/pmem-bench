@@ -1,3 +1,4 @@
+#include <libpmem.h>
 #include <sstream>
 #include "hrd.h"
 
@@ -148,6 +149,25 @@ void hrd_resolve_port_index(struct hrd_ctrl_blk_t* cb, size_t phy_port) {
   xmsg << "eRPC IBTransport: Failed to resolve InfiniBand port index "
        << std::to_string(phy_port);
   throw std::runtime_error(xmsg.str());
+}
+
+uint8_t* hrd_malloc_pmem(size_t size) {
+  size_t mapped_len;
+  int is_pmem;
+
+  // Use the 64 KB file
+  uint8_t* pbuf = reinterpret_cast<uint8_t*>(
+      pmem_map_file(kHrdPmemFile, 0 /* length */, 0 /* flags */, 0666,
+                    &mapped_len, &is_pmem));
+
+  rt_assert(pbuf != nullptr,
+            "pmem_map_file() failed. " + std::string(strerror(errno)));
+  rt_assert(mapped_len >= size, "pmem size larger than 64K");
+  rt_assert(reinterpret_cast<size_t>(pbuf) % 4096 == 0,
+            "Mapped buffer isn't page-aligned");
+  rt_assert(is_pmem == 1, "File is not pmem");
+
+  return pbuf;
 }
 
 // Allocate SHM with @shm_key, and save the shmid into @shm_id_ret
