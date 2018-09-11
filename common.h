@@ -197,7 +197,7 @@ class HdrHistogram {
     hdr_record_value(hist, static_cast<int64_t>(v));
   }
 
-  size_t percentile(double p) {
+  size_t percentile(double p) const {
     return static_cast<size_t>(hdr_value_at_percentile(hist, p));
   }
 

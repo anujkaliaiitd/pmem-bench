@@ -16,6 +16,10 @@ static constexpr size_t kFileSizeBytes = kFileSizeGB * GB(1);
 double freq_ghz = 0.0;
 static size_t align64(size_t x) { return x - x % 64; }
 
+static constexpr int kHdrPrecision = 2;          // Precision for hdr histograms
+static constexpr int kMinPmemLatCycles = 1;      // Min pmem latency in cycles
+static constexpr int kMaxPmemLatCycles = MB(1);  // Max pmem latency in cycles
+
 /// Get a random offset in the file with at least \p space after it
 size_t get_random_offset_with_space(pcg64_fast &pcg, size_t space) {
   size_t iters = 0;
@@ -132,20 +136,44 @@ void bench_rand_write_lat(uint8_t *pbuf, size_t thread_id) {
 }
 
 /// Latency of persisting to the same byte in a file. Useful for timestamps etc.
-void bench_same_byte_write_lat(uint8_t *pbuf) {
+void bench_same_byte_write_lat(uint8_t *pbuf, size_t) {
   static constexpr size_t kNumIters = MB(1);
 
-  struct timespec start;
-  clock_gettime(CLOCK_REALTIME, &start);
+  std::vector<size_t> lat_array(kNumIters);
+  HdrHistogram hist(kMinPmemLatCycles, kMaxPmemLatCycles, kHdrPrecision);
 
-  for (size_t i = 0; i < kNumIters; i++) {
+  // Warmup
+  for (size_t i = 0; i < kNumIters / 10; i++) {
     pbuf[0] = 'A';
     pmem_persist(pbuf, 1);
   }
+  nano_sleep(10000, freq_ghz);  // 10 microseconds
+  for (auto &l : lat_array) l = 0;
 
-  double tot_ns = ns_since(start);
-  printf("Latency of persistent writes to same byte = %.2f ns\n",
-         tot_ns / kNumIters);
+  // Real work
+  for (size_t i = 0; i < kNumIters; i++) {
+    size_t start = rdtscp();
+    pbuf[0] = 'A';
+    pmem_persist(pbuf, 1);
+
+    size_t lat_cycles = rdtscp() - start;
+    lat_array[i] = lat_cycles;
+    hist.record_value(lat_cycles);
+  }
+
+  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
+  for (size_t i = 0; i < 100; i++) {
+    size_t rand_iter = pcg() % kNumIters;
+    printf("iter %zu : %zu ns\n", rand_iter,
+           static_cast<size_t>(lat_array[rand_iter] / freq_ghz));
+  }
+
+  printf(
+      "Latency of persistent writes to same byte = "
+      "%zu ns 50, %zu ns 99, %zu ns 99.9.\n",
+      static_cast<size_t>(hist.percentile(50) / freq_ghz),
+      static_cast<size_t>(hist.percentile(99) / freq_ghz),
+      static_cast<size_t>(hist.percentile(99.9) / freq_ghz));
 }
 
 /// Bandwidth of large writes
@@ -349,9 +377,10 @@ int main(int argc, char **argv) {
     // threads[i] = std::thread(bench_rand_read_tput, pbuf, i);
     // threads[i] = std::thread(bench_rand_write_lat, pbuf, i);
     // threads[i] = std::thread(bench_rand_write_tput, pbuf, i);
+    threads[i] = std::thread(bench_same_byte_write_lat, pbuf, i);
     // threads[i] = std::thread(bench_write_sequential, pbuf, i);
     // threads[i] = std::thread(bench_write_block_size, pbuf, i);
-    threads[i] = std::thread(bench_low_load_sequential_writes, pbuf, i);
+    // threads[i] = std::thread(bench_low_load_sequential_writes, pbuf, i);
   }
 
   for (auto &thread : threads) thread.join();
