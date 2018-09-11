@@ -76,8 +76,7 @@ set(HRD_SOURCES
   libhrd_cpp/hrd_util.cc)
 
 set(BENCHMARKS
-  write-flush
-  microbench)
+  write-flush)
 
 foreach(bench IN LISTS BENCHMARKS)
   add_executable(${bench} ${bench}/main.cc ${HRD_SOURCES})

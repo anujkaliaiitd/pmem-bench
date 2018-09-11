@@ -1,4 +1,4 @@
-exe="../build/microbench"
+exe="./main"
 chmod +x $exe
 
 num_threads=1
