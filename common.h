@@ -2,6 +2,7 @@
 #define likely(x) __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
 
+#include <x86intrin.h>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -62,20 +63,19 @@ static inline void rt_assert(bool condition) {
   if (unlikely(!condition)) throw std::runtime_error("Error");
 }
 
-/// Return the TSC
-static inline size_t rdtsc() {
-  uint64_t rax;
-  uint64_t rdx;
-  asm volatile("rdtsc" : "=a"(rax), "=d"(rdx));
-  return static_cast<size_t>((rdx << 32) | rax);
+inline uint64_t rdtsc() {
+  _mm_lfence();  // Wait for earlier instructions to retire
+  uint64_t tsc = __rdtsc();
+  _mm_lfence();  // Block later instructions until rdtsc retires
+  return tsc;
 }
 
-static uint64_t rdtscp() {
-  uint64_t rax;
-  uint64_t rdx;
-  uint32_t aux;
-  asm volatile("rdtscp" : "=a"(rax), "=d"(rdx), "=c"(aux) : :);
-  return (rdx << 32) | rax;
+inline uint64_t rdtscp() {
+  unsigned dummy;
+  _mm_lfence();  // Wait for earlier instructions to retire
+  uint64_t tsc = __rdtscp(&dummy);
+  _mm_lfence();  // Block later instructions until rdtsc retires
+  return tsc;
 }
 
 static void nano_sleep(size_t ns, double freq_ghz) {
