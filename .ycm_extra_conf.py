@@ -39,6 +39,7 @@ home_dir = expanduser("~")
 flags = [
     '-x',
     'c++',
+    '-I' + str(home_dir) + '/rdma_bench',
     '-Wall',
     '-Werror',
     '-Wextra',
