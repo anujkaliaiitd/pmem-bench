@@ -228,6 +228,31 @@ void bench_same_byte_write_tput(uint8_t *_pbuf, size_t) {
          kNumIters / (bench_seconds * 1000000));
 }
 
+/// Throughput for persisting to the a circular buffer with cacheline-aligned
+/// slots
+void bench_circular_buffer_write_tput(uint8_t *_pbuf, size_t) {
+  static constexpr size_t kNumIters = MB(1);
+  static constexpr size_t kChunkSize = 64;
+  static constexpr size_t kNumChunks = 32;
+  auto *pbuf = reinterpret_cast<size_t *>(_pbuf);
+  const uint8_t data[kChunkSize] = {0};
+
+  while (true) {
+    struct timespec bench_start;
+    clock_gettime(CLOCK_REALTIME, &bench_start);
+
+    // Real work
+    for (size_t i = 0; i < kNumIters; i++) {
+      size_t chunk_idx = i % kNumChunks;
+      pmem_memcpy_persist(&pbuf[chunk_idx * kChunkSize], data, kChunkSize);
+    }
+
+    double bench_seconds = sec_since(bench_start);
+    printf("Througput of writes circular buffer chunks = %.2f M/s\n",
+           kNumIters / (bench_seconds * 1000000));
+  }
+}
+
 /// Bandwidth of large writes
 void bench_write_sequential(uint8_t *pbuf, size_t thread_id) {
   static constexpr size_t kCopySize = MB(256);
@@ -427,8 +452,9 @@ int main(int argc, char **argv) {
     // threads[i] = std::thread(bench_rand_read_tput, pbuf, i);
     // threads[i] = std::thread(bench_rand_write_lat, pbuf, i);
     // threads[i] = std::thread(bench_rand_write_tput, pbuf, i);
-    threads[i] = std::thread(bench_same_byte_write_lat, pbuf, i);
+    // threads[i] = std::thread(bench_same_byte_write_lat, pbuf, i);
     // threads[i] = std::thread(bench_same_byte_write_tput, pbuf, i);
+    threads[i] = std::thread(bench_circular_buffer_write_tput, pbuf, i);
     // threads[i] = std::thread(bench_write_sequential, pbuf, i);
     // threads[i] = std::thread(bench_write_block_size, pbuf, i);
     // threads[i] = std::thread(bench_low_load_sequential_writes, pbuf, i);
