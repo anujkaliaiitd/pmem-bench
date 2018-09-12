@@ -139,55 +139,46 @@ void bench_rand_write_lat(uint8_t *pbuf, size_t thread_id) {
 /// The time measurement in this benchmark makes sense only with gcc
 /// optimizations. Without any optimization flags, it's way off.
 void bench_same_byte_write_lat(uint8_t *_pbuf, size_t) {
-  static constexpr size_t kNumIters = MB(1);
-  static constexpr bool kRecordLatSamples = true;
-
+  static constexpr size_t kNumWarmupIters = 128;
+  static constexpr size_t kNumExperiments = 128;
   auto *pbuf = reinterpret_cast<size_t *>(_pbuf);
 
-  std::vector<size_t> lat_array(kNumIters);
-  HdrHistogram hist(kMinPmemLatCycles, kMaxPmemLatCycles, kHdrPrecision);
+  static constexpr size_t kMaxNumWrites = 24;
+  size_t ns_arr[kMaxNumWrites] = {0};
 
-  // Warmup
-  for (size_t i = 0; i < kNumIters / 10; i++) {
-    pbuf[0] = i;
-    pmem_persist(&pbuf[0], sizeof(size_t));
-  }
-  nano_sleep(100000, freq_ghz);  // 100 microseconds
-  for (auto &l : lat_array) l = 0;
+  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
+  printf("num_writes, nanoseconds\n");
 
-  struct timespec tot_start;
-  clock_gettime(CLOCK_REALTIME, &tot_start);
+  // We average our measurements over kNumExperiments experiments
+  for (size_t exp = 0; exp < kNumExperiments; exp++) {
+    // In each experiment, we measure the latency of num_writes writes to the
+    // same byte
+    for (size_t num_writes = 1; num_writes <= kMaxNumWrites; num_writes++) {
+      const size_t byte_idx = pcg() % (kFileSizeBytes / sizeof(size_t));
 
-  // Real work
-  for (size_t i = 0; i < kNumIters; i++) {
-    size_t start = rdtscp();
-    pbuf[0] = i;
-    pmem_persist(&pbuf[0], sizeof(size_t));
+      // Warmup
+      for (size_t i = 0; i < kNumWarmupIters; i++) {
+        pbuf[byte_idx] = i;
+        pmem_persist(&pbuf[byte_idx], sizeof(size_t));
+      }
+      nano_sleep(100000, freq_ghz);  // 100 microseconds
 
-    size_t lat_cycles = rdtscp() - start;
-    if (kRecordLatSamples) lat_array[i] = lat_cycles;
-    hist.record_value(lat_cycles);
-  }
-  double bench_seconds = sec_since(tot_start);
+      struct timespec start;
+      clock_gettime(CLOCK_REALTIME, &start);
 
-  if (kRecordLatSamples) {
-    pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
-    for (size_t i = 0; i < 50; i++) {
-      // size_t rand_iter = pcg() % kNumIters;
-      size_t rand_iter = i;
-      printf("iter %zu : %zu ns\n", rand_iter,
-             static_cast<size_t>(lat_array[rand_iter] / freq_ghz));
+      // Real work
+      for (size_t j = 0; j < num_writes; j++) {
+        pbuf[byte_idx] = num_writes + j;
+        pmem_persist(&pbuf[byte_idx], sizeof(size_t));
+      }
+
+      ns_arr[num_writes] += ns_since(start);
     }
   }
 
-  printf(
-      "Latency of persistent writes to same byte = "
-      "%zu ns 50, %zu ns 99, %zu ns 99.9. Total bench time = %.2f seconds.\n",
-      static_cast<size_t>(hist.percentile(50) / freq_ghz),
-      static_cast<size_t>(hist.percentile(99) / freq_ghz),
-      static_cast<size_t>(hist.percentile(99.9) / freq_ghz), bench_seconds);
-
-  printf("Final value = %zu\n", pbuf[0]);
+  for (size_t i = 0; i < kMaxNumWrites; i++) {
+    printf("%zu, %zu\n", i, ns_arr[i] / kNumExperiments);
+  }
 }
 
 /// Throughput for persisting to the same byte
