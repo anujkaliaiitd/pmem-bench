@@ -186,7 +186,7 @@ void bench_same_byte_write_lat(uint8_t *_pbuf, size_t) {
       }
 
       mfence();
-      ns_arr[num_writes] += (rdtscp() - cycles_start) / freq_ghz;
+      ns_arr[num_writes] += to_nsec(rdtscp() - cycles_start, freq_ghz);
     }
   }
 
