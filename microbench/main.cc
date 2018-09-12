@@ -228,13 +228,11 @@ void bench_same_byte_write_tput(uint8_t *_pbuf, size_t) {
          kNumIters / (bench_seconds * 1000000));
 }
 
-/// Throughput for persisting to the a circular buffer with cacheline-aligned
-/// slots
-void bench_circular_buffer_write_tput(uint8_t *_pbuf, size_t) {
+/// Throughput for persisting to the a buffer with cacheline-aligned slots
+void bench_circular_buffer_write_tput(uint8_t *pbuf, size_t) {
   static constexpr size_t kNumIters = MB(1);
   static constexpr size_t kChunkSize = 64;
   static constexpr size_t kNumChunks = 32;
-  auto *pbuf = reinterpret_cast<size_t *>(_pbuf);
   const uint8_t data[kChunkSize] = {0};
 
   while (true) {
