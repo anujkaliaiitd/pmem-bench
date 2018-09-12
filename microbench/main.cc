@@ -147,10 +147,10 @@ void bench_same_byte_write_lat(uint8_t *_pbuf, size_t) {
   size_t ns_arr[kMaxNumWrites] = {0};
 
   pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
-  printf("num_writes, nanoseconds\n");
 
   // We average our measurements over kNumExperiments experiments
   for (size_t exp = 0; exp < kNumExperiments; exp++) {
+    printf("Starting experiment %zu\n", exp);
     // In each experiment, we measure the latency of num_writes writes to the
     // same byte
     for (size_t num_writes = 1; num_writes <= kMaxNumWrites; num_writes++) {
@@ -174,8 +174,11 @@ void bench_same_byte_write_lat(uint8_t *_pbuf, size_t) {
 
       ns_arr[num_writes] += ns_since(start);
     }
+
+    printf("Experiment %zu complete\n", exp);
   }
 
+  printf("num_writes, nanoseconds\n");
   for (size_t i = 0; i < kMaxNumWrites; i++) {
     printf("%zu, %zu\n", i, ns_arr[i] / kNumExperiments);
   }
@@ -400,8 +403,6 @@ int main(int argc, char **argv) {
   // map_in_file_whole(pbuf, mapped_len);
 
   //  nano_sleep(1000000000, 3.0);  // Assume TSC frequency = 3 GHz
-
-  printf("Warming up for around 1 second.\n");
 
   std::vector<std::thread> threads(FLAGS_num_threads);
   for (size_t i = 0; i < FLAGS_num_threads; i++) {
