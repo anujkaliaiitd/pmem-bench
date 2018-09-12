@@ -148,7 +148,7 @@ void bench_same_byte_write_lat(uint8_t *_pbuf, size_t) {
 
   // Allow using a DRAM buffer to measure the overhead of mfence()
   static constexpr bool kUseDramBuffer = false;
-  static constexpr size_t kDramBufferSize = GB(1);
+  static constexpr size_t kDramBufferSize = KB(4);
   if (kUseDramBuffer) {
     pbuf = reinterpret_cast<size_t *>(malloc(kDramBufferSize));
     memset(pbuf, 0, kDramBufferSize);
@@ -160,35 +160,44 @@ void bench_same_byte_write_lat(uint8_t *_pbuf, size_t) {
   for (size_t exp = 0; exp < kNumExperiments; exp++) {
     // In each exp, we measure the latency of num_writes writes to byte_idx
     for (size_t num_writes = 1; num_writes < kMaxNumWrites; num_writes++) {
-      const size_t byte_idx =
-          pcg() % ((kUseDramBuffer ? kDramBufferSize : kFileSizeBytes) /
-                   sizeof(size_t));
+      const size_t byte_idx_pmem = pcg() % (kFileSizeBytes / sizeof(size_t));
 
       // Warmup
-      for (size_t i = 0; i < kNumWarmupIters; i++) {
-        pbuf[byte_idx] = i;
-        if (!kUseDramBuffer) pmem_persist(&pbuf[byte_idx], sizeof(size_t));
+      if (!kUseDramBuffer) {
+        for (size_t i = 0; i < kNumWarmupIters; i++) {
+          pbuf[byte_idx_pmem] = i;
+          pmem_persist(&pbuf[byte_idx_pmem], sizeof(size_t));
+        }
+        nano_sleep(100000, freq_ghz);  // 100 microseconds
       }
-      nano_sleep(100000, freq_ghz);  // 100 microseconds
 
-      struct timespec start;
-      clock_gettime(CLOCK_REALTIME, &start);
+      size_t cycles_start = rdtscp();
       mfence();
 
       // Real work
       for (size_t j = 0; j < num_writes; j++) {
-        pbuf[byte_idx] = num_writes + j;
-        if (!kUseDramBuffer) pmem_persist(&pbuf[byte_idx], sizeof(size_t));
+        if (!kUseDramBuffer) {
+          pbuf[byte_idx_pmem] = num_writes + j;
+          pmem_persist(&pbuf[byte_idx_pmem], sizeof(size_t));
+        } else {
+          pbuf[pcg() % (kDramBufferSize / sizeof(size_t))] =
+              exp * num_writes + j;
+        }
       }
 
       mfence();
-      ns_arr[num_writes] += ns_since(start);
+      ns_arr[num_writes] += (rdtscp() - cycles_start) / freq_ghz;
     }
   }
 
   printf("num_writes, nanoseconds\n");
   for (size_t i = 1; i < kMaxNumWrites; i++) {
     printf("%zu, %zu\n", i, ns_arr[i] / kNumExperiments);
+  }
+
+  if (kUseDramBuffer) {
+    printf("Random DRAM buffer probe = %zu\n",
+           pbuf[pcg() % (kDramBufferSize / sizeof(size_t))]);
   }
 }
 
