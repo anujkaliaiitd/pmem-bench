@@ -452,10 +452,10 @@ int main(int argc, char **argv) {
     // threads[i] = std::thread(bench_rand_write_tput, pbuf, i);
     // threads[i] = std::thread(bench_same_byte_write_lat, pbuf, i);
     // threads[i] = std::thread(bench_same_byte_write_tput, pbuf, i);
-    threads[i] = std::thread(bench_circular_buffer_write_tput, pbuf, i);
+    // threads[i] = std::thread(bench_circular_buffer_write_tput, pbuf, i);
     // threads[i] = std::thread(bench_write_sequential, pbuf, i);
     // threads[i] = std::thread(bench_write_block_size, pbuf, i);
-    // threads[i] = std::thread(bench_low_load_sequential_writes, pbuf, i);
+    threads[i] = std::thread(bench_low_load_sequential_writes, pbuf, i);
   }
 
   for (auto &thread : threads) thread.join();

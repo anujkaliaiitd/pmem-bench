@@ -13,9 +13,10 @@ static double sec_since(const struct timespec &t0) {
 
 int main() {
   static constexpr size_t kNumIters = 1000000;
-  static constexpr size_t kChunkSize = 64;
-  static constexpr size_t kNumChunks = 32;
-  const uint8_t data[kChunkSize] = {0};
+  static constexpr size_t kChunkSize = 256;
+  static constexpr size_t kWriteSize = 64;
+  static constexpr size_t kNumChunks = 8;
+  const uint8_t data[kWriteSize] = {0};
 
   size_t mapped_len;
   int is_pmem;
@@ -38,8 +39,8 @@ int main() {
 
     // Real work
     for (size_t i = 0; i < kNumIters; i++) {
-      size_t chunk_idx = i % kNumChunks;
-      pmem_memcpy_persist(&pbuf[chunk_idx * kChunkSize], data, kChunkSize);
+      const size_t chunk_idx = i % kNumChunks;
+      pmem_memcpy_persist(&pbuf[chunk_idx * kChunkSize], data, kWriteSize);
     }
 
     double bench_seconds = sec_since(bench_start);
