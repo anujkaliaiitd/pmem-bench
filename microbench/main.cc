@@ -146,40 +146,48 @@ void bench_same_byte_write_lat(uint8_t *_pbuf, size_t) {
   static constexpr size_t kMaxNumWrites = 24;
   size_t ns_arr[kMaxNumWrites] = {0};
 
+  // Allow using a DRAM buffer to measure the overhead of mfence()
+  static constexpr bool kUseDramBuffer = false;
+  static constexpr size_t kDramBufferSize = GB(1);
+  if (kUseDramBuffer) {
+    pbuf = reinterpret_cast<size_t *>(malloc(kDramBufferSize));
+    memset(pbuf, 0, kDramBufferSize);
+  }
+
   pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
 
   // We average our measurements over kNumExperiments experiments
   for (size_t exp = 0; exp < kNumExperiments; exp++) {
-    printf("Starting experiment %zu\n", exp);
-    // In each experiment, we measure the latency of num_writes writes to the
-    // same byte
-    for (size_t num_writes = 1; num_writes <= kMaxNumWrites; num_writes++) {
-      const size_t byte_idx = pcg() % (kFileSizeBytes / sizeof(size_t));
+    // In each exp, we measure the latency of num_writes writes to byte_idx
+    for (size_t num_writes = 1; num_writes < kMaxNumWrites; num_writes++) {
+      const size_t byte_idx =
+          pcg() % ((kUseDramBuffer ? kDramBufferSize : kFileSizeBytes) /
+                   sizeof(size_t));
 
       // Warmup
       for (size_t i = 0; i < kNumWarmupIters; i++) {
         pbuf[byte_idx] = i;
-        pmem_persist(&pbuf[byte_idx], sizeof(size_t));
+        if (!kUseDramBuffer) pmem_persist(&pbuf[byte_idx], sizeof(size_t));
       }
       nano_sleep(100000, freq_ghz);  // 100 microseconds
 
       struct timespec start;
       clock_gettime(CLOCK_REALTIME, &start);
+      mfence();
 
       // Real work
       for (size_t j = 0; j < num_writes; j++) {
         pbuf[byte_idx] = num_writes + j;
-        pmem_persist(&pbuf[byte_idx], sizeof(size_t));
+        if (!kUseDramBuffer) pmem_persist(&pbuf[byte_idx], sizeof(size_t));
       }
 
+      mfence();
       ns_arr[num_writes] += ns_since(start);
     }
-
-    printf("Experiment %zu complete\n", exp);
   }
 
   printf("num_writes, nanoseconds\n");
-  for (size_t i = 0; i < kMaxNumWrites; i++) {
+  for (size_t i = 1; i < kMaxNumWrites; i++) {
     printf("%zu, %zu\n", i, ns_arr[i] / kNumExperiments);
   }
 }
