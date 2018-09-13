@@ -1,37 +1,24 @@
+#include <assert.h>
 #include <libpmem.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 
-/// Return seconds elapsed since timestamp \p t0
-static double sec_since(const struct timespec &t0) {
-  struct timespec t1;
-  clock_gettime(CLOCK_REALTIME, &t1);
-  return (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1000000000.0;
-}
-
 int main() {
   static constexpr size_t kNumIters = 1000000;
   static constexpr size_t kChunkSize = 256;
   static constexpr size_t kWriteSize = 64;
   static constexpr size_t kNumChunks = 8;
-  const uint8_t data[kWriteSize] = {0};
+  const uint8_t data[kChunkSize] = {0};
 
   size_t mapped_len;
   int is_pmem;
   uint8_t *pbuf = reinterpret_cast<uint8_t *>(
       pmem_map_file("/mnt/pmem12/raft_log", 0, 0, 0666, &mapped_len, &is_pmem));
 
-  if (pbuf == nullptr) {
-    fprintf(stderr, "/mnt/pmem12/raft_log does not exist\n");
-    exit(-1);
-  }
-
-  if (mapped_len < kChunkSize * kNumChunks) {
-    fprintf(stderr, "File too small\n");
-    exit(-1);
-  }
+  assert(pbuf != nullptr);
+  assert(mapped_len >= kChunkSize * kNumChunks);
 
   while (true) {
     struct timespec bench_start;
@@ -43,8 +30,13 @@ int main() {
       pmem_memcpy_persist(&pbuf[chunk_idx * kChunkSize], data, kWriteSize);
     }
 
-    double bench_seconds = sec_since(bench_start);
-    printf("Througput of writes circular buffer chunks = %.2f M/s\n",
+    struct timespec bench_end;
+    clock_gettime(CLOCK_REALTIME, &bench_end);
+    double bench_seconds =
+        (bench_end.tv_sec - bench_start.tv_sec) +
+        (bench_end.tv_nsec - bench_start.tv_nsec) / 1000000000.0;
+
+    printf("Throughput of writes with %zu chunks = %.2f M/s\n", kNumChunks,
            kNumIters / (bench_seconds * 1000000));
   }
 
