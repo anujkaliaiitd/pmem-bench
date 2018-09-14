@@ -1,10 +1,4 @@
 #include <errno.h>
-#include <fcntl.h>
-#include <libpmem.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <sstream>
@@ -157,19 +151,6 @@ void hrd_resolve_port_index(struct hrd_ctrl_blk_t* cb, size_t phy_port) {
   xmsg << "eRPC IBTransport: Failed to resolve InfiniBand port index "
        << std::to_string(phy_port);
   throw std::runtime_error(xmsg.str());
-}
-
-uint8_t* hrd_malloc_pmem(size_t size) {
-  _unused(size);
-  int fd = open(kHrdPmemFile, O_RDWR);
-  rt_assert(fd >= 0, "devdax open failed");
-
-  void* buf = mmap(nullptr, 2ull * 1024 * 1024 * 1024, PROT_READ | PROT_WRITE,
-                   MAP_SHARED, fd, 0);
-  rt_assert(buf != MAP_FAILED, "mmap failed for devdax");
-  memset(buf, 0, 2ull * 1024 * 1024 * 1024);
-
-  return reinterpret_cast<uint8_t*>(buf);
 }
 
 // Allocate SHM with @shm_key, and save the shmid into @shm_id_ret

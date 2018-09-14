@@ -1,6 +1,10 @@
+#include <fcntl.h>
 #include <gflags/gflags.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <thread>
 #include <vector>
 #include "latency.h"
@@ -11,20 +15,40 @@ static constexpr size_t kAppBufSize = KB(4);
 static constexpr size_t kAppDataSize = 16;
 static_assert(kAppDataSize <= kHrdMaxInline, "");
 
+static constexpr bool kAppUsePmem = true;
+static constexpr size_t kAppPmemSize = MB(2);
+static constexpr const char* kPmemFile = "/dev/dax0.0";
+static_assert(kAppPmemSize >= kAppBufSize, "");
+
 // Number of writes that to flush. The (WRITE+READ) combos for all writes are
 // issued in one postlist. The writes become visible to the remote CPU in
 // sequence.
 // Only the last READ in the postlist is signaled, so kAppNumWrites cannot be
 // too large. Else we'll run into signaling issues.
-static constexpr size_t kAppNumWrites = 1;
+static constexpr size_t kAppNumWrites = 2;
+
+uint8_t* get_pmem_buf() {
+  int fd = open(kPmemFile, O_RDWR);
+  rt_assert(fd >= 0, "devdax open failed");
+
+  void* buf =
+      mmap(nullptr, kAppPmemSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  rt_assert(buf != MAP_FAILED, "mmap failed for devdax");
+  memset(buf, 0, kAppPmemSize);
+
+  return reinterpret_cast<uint8_t*>(buf);
+}
 
 void run_server() {
+  uint8_t* pmem_buf = nullptr;
+  if (kAppUsePmem) pmem_buf = get_pmem_buf();
+
   struct hrd_conn_config_t conn_config;
   conn_config.num_qps = 1;
   conn_config.use_uc = false;
-  conn_config.prealloc_buf = nullptr;
+  conn_config.prealloc_buf = kAppUsePmem ? pmem_buf : nullptr;
   conn_config.buf_size = kAppBufSize;
-  conn_config.buf_shm_key = 3185;
+  conn_config.buf_shm_key = kAppUsePmem ? -1 : 3185;
 
   auto* cb = hrd_ctrl_blk_init(0 /* id */, 0 /* port */, 0 /* numa */,
                                &conn_config, nullptr /* dgram config */);

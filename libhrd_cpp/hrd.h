@@ -34,10 +34,6 @@ static constexpr size_t kHrdMaxUDQPs = 256;  ///< Maximum number of UD QPs
 
 static constexpr size_t kHrdQPNameSize = 200;
 
-/// Use persistent memory buffers for connected transports
-static constexpr bool kHrdUsePmemConnBuf = true;
-static constexpr const char* kHrdPmemFile = "/dev/dax0.0";
-
 // This needs to be a macro because we don't have Mellanox OFED for Debian
 #define kHrdMlx5Atomics false
 #define kHrdReservedNamePrefix "__HRD_RESERVED_NAME_PREFIX"
@@ -254,7 +250,6 @@ static inline size_t hrd_get_cycles() {
 
 static inline int hrd_is_power_of_2(uint64_t n) { return n && !(n & (n - 1)); }
 
-uint8_t* hrd_malloc_pmem(size_t size);
 uint8_t* hrd_malloc_socket(int shm_key, size_t size, size_t socket_id);
 int hrd_free(int shm_key, void* shm_buf);
 void hrd_red_printf(const char* format, ...);
