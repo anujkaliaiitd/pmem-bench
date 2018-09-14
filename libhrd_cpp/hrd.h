@@ -36,7 +36,7 @@ static constexpr size_t kHrdQPNameSize = 200;
 
 /// Use persistent memory buffers for connected transports
 static constexpr bool kHrdUsePmemConnBuf = true;
-static constexpr const char* kHrdPmemFile = "/mnt/pmem12/64K";
+static constexpr const char* kHrdPmemFile = "/dev/dax0.0";
 
 // This needs to be a macro because we don't have Mellanox OFED for Debian
 #define kHrdMlx5Atomics false
