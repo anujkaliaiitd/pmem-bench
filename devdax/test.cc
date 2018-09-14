@@ -16,12 +16,12 @@ int main() {
     exit(-1);
   }
 
-  size_t size = 1579103027200ull;
+  size_t size = 2ull * 1024 * 1024 * 1024;
   buf = mmap(nullptr, static_cast<size_t>(size), PROT_READ | PROT_WRITE,
              MAP_SHARED, fd, 0);
   if (buf == MAP_FAILED) {
     perror("mmap failed");
-    exit(EXIT_FAILURE);
+    exit(-1);
   }
 
   printf("%s\n", buf);
@@ -29,5 +29,4 @@ int main() {
 
   munmap(buf, static_cast<size_t>(size));
   close(fd);
-  return EXIT_SUCCESS;
 }
