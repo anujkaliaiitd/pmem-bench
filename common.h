@@ -16,6 +16,18 @@ static void lfence() { asm volatile("lfence" ::: "memory"); }
 static void sfence() { asm volatile("sfence" ::: "memory"); }
 static void mfence() { asm volatile("mfence" ::: "memory"); }
 
+template <typename T>
+static constexpr bool is_power_of_two(T x) {
+  return x && ((x & T(x - 1)) == 0);
+}
+
+template <uint64_t PowerOfTwoNumber, typename T>
+static constexpr T roundup(T x) {
+  static_assert(is_power_of_two(PowerOfTwoNumber),
+                "PowerOfTwoNumber must be a power of 2");
+  return ((x) + T(PowerOfTwoNumber - 1)) & (~T(PowerOfTwoNumber - 1));
+}
+
 class SlowRand {
   std::random_device rand_dev;  // Non-pseudorandom seed for twister
   std::mt19937_64 mt;

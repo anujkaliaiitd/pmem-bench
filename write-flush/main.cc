@@ -5,54 +5,57 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <pcg/pcg_random.hpp>
+#include <random>
 #include <thread>
 #include <vector>
 #include "latency.h"
 #include "libhrd_cpp/hrd.h"
 
 DEFINE_uint64(is_client, 0, "Is this process a client?");
-static constexpr size_t kAppBufSize = KB(4);
-static constexpr size_t kAppDataSize = 16;
-static_assert(kAppDataSize <= kHrdMaxInline, "");
+static constexpr size_t kBufSize = KB(4);  // Registered buffer size
+static constexpr size_t kMsgSize = 16;     // RDMA message size
+static_assert(kMsgSize <= kHrdMaxInline, "");
 
-static constexpr bool kAppUsePmem = true;
-static constexpr size_t kAppPmemSize = MB(2);
+static constexpr bool kUsePmem = true;
 static constexpr const char* kPmemFile = "/dev/dax0.0";
-static_assert(kAppPmemSize >= kAppBufSize, "");
 
-// Number of writes that to flush. The (WRITE+READ) combos for all writes are
-// issued in one postlist. The writes become visible to the remote CPU in
-// sequence.
-// Only the last READ in the postlist is signaled, so kAppNumWrites cannot be
-// too large. Else we'll run into signaling issues.
-static constexpr size_t kAppNumWrites = 2;
+// Number of writes to flush. The (WRITE+READ) combos for all writes are
+// issued in one postlist. Only the last READ in the postlist is signaled, so
+// kNumWrites cannot be too large. Else we'll run into signaling issues.
+static constexpr size_t kNumWritesToFlush = 1;
+
+// If true, we issue only one signaled write and no reads. kNumWritesToFlush is
+// disregarded.
+static constexpr bool kJustAWrite = true;
 
 uint8_t* get_pmem_buf() {
   int fd = open(kPmemFile, O_RDWR);
   rt_assert(fd >= 0, "devdax open failed");
 
+  size_t pmem_size = round_up<MB(2)>(kBufSize);  // Smaller sizes may fail
   void* buf =
-      mmap(nullptr, kAppPmemSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+      mmap(nullptr, pmem_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   rt_assert(buf != MAP_FAILED, "mmap failed for devdax");
-  memset(buf, 0, kAppPmemSize);
+  memset(buf, 0, pmem_size);
 
   return reinterpret_cast<uint8_t*>(buf);
 }
 
 void run_server() {
   uint8_t* pmem_buf = nullptr;
-  if (kAppUsePmem) pmem_buf = get_pmem_buf();
+  if (kUsePmem) pmem_buf = get_pmem_buf();
 
   struct hrd_conn_config_t conn_config;
   conn_config.num_qps = 1;
   conn_config.use_uc = false;
-  conn_config.prealloc_buf = kAppUsePmem ? pmem_buf : nullptr;
-  conn_config.buf_size = kAppBufSize;
-  conn_config.buf_shm_key = kAppUsePmem ? -1 : 3185;
+  conn_config.prealloc_buf = kUsePmem ? pmem_buf : nullptr;
+  conn_config.buf_size = kBufSize;
+  conn_config.buf_shm_key = kUsePmem ? -1 : 3185;
 
   auto* cb = hrd_ctrl_blk_init(0 /* id */, 0 /* port */, 0 /* numa */,
                                &conn_config, nullptr /* dgram config */);
-  memset(const_cast<uint8_t*>(cb->conn_buf), 0, kAppBufSize);
+  memset(const_cast<uint8_t*>(cb->conn_buf), 0, kBufSize);
 
   hrd_publish_conn_qp(cb, 0, "server");
   printf("main: Server published. Waiting for client.\n");
@@ -68,14 +71,29 @@ void run_server() {
   hrd_publish_ready("server");
   printf("main: Server ready. Going to sleep.\n");
 
+  const bool kMonitorOrdering = false;
   while (true) {
-    sleep(1);  // Uncomment this to monitor actively
-    size_t val_2 = *reinterpret_cast<volatile size_t*>(&cb->conn_buf[64]);
-    asm volatile("" ::: "memory");        // Compiler barrier
-    asm volatile("mfence" ::: "memory");  // Hardware barrier
-    size_t val_1 = *reinterpret_cast<volatile size_t*>(&cb->conn_buf[0]);
+    if (kMonitorOrdering) {
+      size_t val_2 = *reinterpret_cast<volatile size_t*>(&cb->conn_buf[64]);
+      asm volatile("" ::: "memory");        // Compiler barrier
+      asm volatile("mfence" ::: "memory");  // Hardware barrier
+      size_t val_1 = *reinterpret_cast<volatile size_t*>(&cb->conn_buf[0]);
 
-    if (val_2 > val_1) printf("violation %zu %zu\n", val_1, val_2);
+      if (val_2 > val_1) printf("violation %zu %zu\n", val_1, val_2);
+    } else {
+      sleep(1);
+    }
+  }
+}
+
+/// Get a random offset in the registered buffer with at least kMsgSize space
+size_t get_random_offset(pcg64_fast& pcg) {
+  size_t iters = 0;
+  while (true) {
+    size_t rand_offset = pcg() % kBufSize;
+    if (likely(kBufSize - rand_offset > kMsgSize)) return rand_offset;
+    iters++;
+    if (unlikely(iters > 10)) printf("Random offset took over 10 iters\n");
   }
 }
 
@@ -85,7 +103,7 @@ void run_client() {
   conn_config.num_qps = 1;
   conn_config.use_uc = false;
   conn_config.prealloc_buf = nullptr;
-  conn_config.buf_size = kAppBufSize;
+  conn_config.buf_size = kBufSize;
   conn_config.buf_shm_key = 3185;
 
   auto* cb = hrd_ctrl_blk_init(0 /* id */, 0 /* port */, 0 /* numa */,
@@ -107,16 +125,18 @@ void run_client() {
   hrd_wait_till_ready("server");
 
   // The +1s are for simpler postlist chain pointer math
-  struct ibv_send_wr write_wr[kAppNumWrites + 1], read_wr[kAppNumWrites + 1];
+  static constexpr size_t kArrSz = kNumWritesToFlush + 1;
+  struct ibv_send_wr write_wr[kArrSz], read_wr[kArrSz];
   struct ibv_send_wr* bad_send_wr;
-  struct ibv_sge write_sge[kAppNumWrites + 1], read_sge[kAppNumWrites + 1];
+  struct ibv_sge write_sge[kArrSz], read_sge[kArrSz];
   struct ibv_wc wc;
 
   // Any garbage write
   auto* ptr = reinterpret_cast<volatile uint8_t*>(&cb->conn_buf[0]);
-  for (size_t i = 0; i < kAppBufSize; i++) ptr[i] = 31;
+  for (size_t i = 0; i < kBufSize; i++) ptr[i] = 31;
 
   size_t num_iters = 0;
+  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
 
   while (true) {
     if (num_iters % KB(128) == 0 && num_iters > 0) {
@@ -129,31 +149,33 @@ void run_client() {
     clock_gettime(CLOCK_REALTIME, &start);
 
     // WRITE
-    for (size_t i = 0; i < kAppNumWrites; i++) {
-      const size_t offset = i * 64;
+    for (size_t i = 0; i < kNumWritesToFlush; i++) {
+      const size_t remote_offset = get_random_offset(pcg);
 
-      write_sge[i].addr = reinterpret_cast<uint64_t>(&cb->conn_buf[i]) + offset;
+      write_sge[i].addr =
+          reinterpret_cast<uint64_t>(&cb->conn_buf[i * kMsgSize]);
       *reinterpret_cast<size_t*>(write_sge[i].addr) = num_iters;
-      write_sge[i].length = kAppDataSize;
+      write_sge[i].length = kMsgSize;
       write_sge[i].lkey = cb->conn_buf_mr->lkey;
 
       write_wr[i].opcode = IBV_WR_RDMA_WRITE;
       write_wr[i].num_sge = 1;
       write_wr[i].sg_list = &write_sge[i];
       write_wr[i].send_flags = 0 | IBV_SEND_INLINE;  // Unsignaled
-      write_wr[i].wr.rdma.remote_addr = srv_qp->buf_addr + offset;
+      write_wr[i].wr.rdma.remote_addr = srv_qp->buf_addr + remote_offset;
       write_wr[i].wr.rdma.rkey = srv_qp->rkey;
 
       // READ
-      read_sge[i].addr = reinterpret_cast<uint64_t>(cb->conn_buf) + offset;
-      read_sge[i].length = kAppDataSize;
+      read_sge[i].addr =
+          reinterpret_cast<uint64_t>(&cb->conn_buf[i * kMsgSize]);
+      read_sge[i].length = kMsgSize;
       read_sge[i].lkey = cb->conn_buf_mr->lkey;
 
       read_wr[i].opcode = IBV_WR_RDMA_READ;
       read_wr[i].num_sge = 1;
       read_wr[i].sg_list = &read_sge[i];
       read_wr[i].send_flags = 0;  // Unsignaled. The last read is signaled.
-      read_wr[i].wr.rdma.remote_addr = srv_qp->buf_addr + offset;
+      read_wr[i].wr.rdma.remote_addr = srv_qp->buf_addr + remote_offset;
       read_wr[i].wr.rdma.rkey = srv_qp->rkey;
 
       // Make a chain
@@ -161,8 +183,13 @@ void run_client() {
       read_wr[i].next = &write_wr[i + 1];
     }
 
-    read_wr[kAppNumWrites - 1].send_flags = IBV_SEND_SIGNALED;
-    read_wr[kAppNumWrites - 1].next = nullptr;
+    if (!kJustAWrite) {
+      read_wr[kNumWritesToFlush - 1].send_flags = IBV_SEND_SIGNALED;
+      read_wr[kNumWritesToFlush - 1].next = nullptr;
+    } else {
+      write_wr[0].send_flags |= IBV_SEND_SIGNALED;
+      write_wr[0].next = nullptr;
+    }
 
     int ret = ibv_post_send(cb->conn_qp[0], &write_wr[0], &bad_send_wr);
     rt_assert(ret == 0);
