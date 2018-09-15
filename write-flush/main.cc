@@ -14,7 +14,7 @@
 
 DEFINE_uint64(is_client, 0, "Is this process a client?");
 static constexpr size_t kBufSize = KB(64);  // Registered buffer size
-static constexpr size_t kMinMsgSize = 16;
+static constexpr size_t kMinMsgSize = 64;
 static constexpr size_t kMaxMsgSize = 1024;
 
 static constexpr bool kUsePmem = true;
@@ -36,6 +36,7 @@ uint8_t* get_pmem_buf() {
   void* buf =
       mmap(nullptr, pmem_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   rt_assert(buf != MAP_FAILED, "mmap failed for devdax");
+  rt_assert(reinterpret_cast<size_t>(buf) % 256 == 0);
   memset(buf, 0, pmem_size);
 
   return reinterpret_cast<uint8_t*>(buf);
@@ -70,26 +71,14 @@ void run_server() {
   hrd_publish_ready("server");
   printf("main: Server ready. Going to sleep.\n");
 
-  const bool kMonitorOrdering = false;
-  while (true) {
-    if (kMonitorOrdering) {
-      size_t val_2 = *reinterpret_cast<volatile size_t*>(&cb->conn_buf[64]);
-      asm volatile("" ::: "memory");        // Compiler barrier
-      asm volatile("mfence" ::: "memory");  // Hardware barrier
-      size_t val_1 = *reinterpret_cast<volatile size_t*>(&cb->conn_buf[0]);
-
-      if (val_2 > val_1) printf("violation %zu %zu\n", val_1, val_2);
-    } else {
-      sleep(1);
-    }
-  }
+  while (true) sleep(1);
 }
 
-/// Get a random offset in the registered buffer with at least msg_size space
-size_t get_random_offset(pcg64_fast& pcg, size_t msg_size) {
+/// Get a random offset in the registered buffer aligned to a 256-byte boundary
+size_t get_256_aligned_random_offset(pcg64_fast& pcg, size_t msg_size) {
   size_t iters = 0;
   while (true) {
-    size_t rand_offset = pcg() % kBufSize;
+    size_t rand_offset = (pcg() % kBufSize);
     if (likely(kBufSize - rand_offset > msg_size)) return rand_offset;
     iters++;
     if (unlikely(iters > 10)) printf("Random offset took over 10 iters\n");
@@ -107,6 +96,7 @@ void run_client() {
 
   auto* cb = hrd_ctrl_blk_init(0 /* id */, 0 /* port */, 0 /* numa */,
                                &conn_config, nullptr /* dgram config */);
+  memset(const_cast<uint8_t*>(cb->conn_buf), 31, kBufSize);
 
   hrd_publish_conn_qp(cb, 0, "client");
   printf("main: Client published. Waiting for server.\n");
@@ -130,23 +120,25 @@ void run_client() {
   struct ibv_sge write_sge[kArrSz], read_sge[kArrSz];
   struct ibv_wc wc;
 
-  // Any garbage write
-  auto* ptr = reinterpret_cast<volatile uint8_t*>(&cb->conn_buf[0]);
-  for (size_t i = 0; i < kBufSize; i++) ptr[i] = 31;
-
   size_t num_iters = 0;
-  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
-  size_t msg_size = kMinMsgSize;
+  size_t chunk_idx = 0;  // Remote mem is divided into chunks of size = msg_size
+  size_t msg_size = kMinMsgSize;  // Increases by powers of two
 
+  // pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
+
+  printf("#msg_size median_us 5th_us 99th_us 999th_us\n");  // Stats header
   while (true) {
-    if (num_iters % KB(128) == 0 && num_iters > 0) {
-      printf("msg_size %zu, avg %.1f us, 50 %.1f us, 99 %.1f us\n", msg_size,
-             latency.avg() / 10.0, latency.perc(.50) / 10.0,
-             latency.perc(.99) / 10.0);
+    if (num_iters == KB(256)) {
+      printf("%zu %.1f %.1f %.1f %.1f\n", msg_size, latency.perc(.50) / 10.0,
+             latency.perc(.05) / 10.0, latency.perc(.99) / 10.0,
+             latency.perc(.999) / 10.0);
       latency.reset();
 
       msg_size *= 2;
       if (msg_size > kMaxMsgSize) msg_size = kMinMsgSize;
+
+      chunk_idx = 0;
+      num_iters = 0;
     }
 
     struct timespec start;
@@ -154,11 +146,11 @@ void run_client() {
 
     // WRITE
     for (size_t i = 0; i < kNumWritesToFlush; i++) {
-      const size_t remote_offset = get_random_offset(pcg, msg_size);
+      if (chunk_idx * msg_size >= kBufSize) chunk_idx = 0;
+      const size_t remote_offset = chunk_idx * msg_size;
 
       write_sge[i].addr =
           reinterpret_cast<uint64_t>(&cb->conn_buf[i * msg_size]);
-      *reinterpret_cast<size_t*>(write_sge[i].addr) = num_iters;
       write_sge[i].length = msg_size;
       write_sge[i].lkey = cb->conn_buf_mr->lkey;
 
