@@ -13,9 +13,9 @@
 #include "libhrd_cpp/hrd.h"
 
 DEFINE_uint64(is_client, 0, "Is this process a client?");
-static constexpr size_t kBufSize = KB(4);  // Registered buffer size
-static constexpr size_t kMsgSize = 16;     // RDMA message size
-static_assert(kMsgSize <= kHrdMaxInline, "");
+static constexpr size_t kBufSize = KB(64);  // Registered buffer size
+static constexpr size_t kMinMsgSize = 16;
+static constexpr size_t kMaxMsgSize = 1024;
 
 static constexpr bool kUsePmem = true;
 static constexpr const char* kPmemFile = "/dev/dax0.0";
@@ -25,9 +25,8 @@ static constexpr const char* kPmemFile = "/dev/dax0.0";
 // kNumWrites cannot be too large. Else we'll run into signaling issues.
 static constexpr size_t kNumWritesToFlush = 1;
 
-// If true, we issue only one signaled write and no reads. kNumWritesToFlush is
-// disregarded.
-static constexpr bool kJustAWrite = true;
+// If true, we issue only one signaled write and no reads
+static constexpr bool kJustAWrite = false;
 
 uint8_t* get_pmem_buf() {
   int fd = open(kPmemFile, O_RDWR);
@@ -86,12 +85,12 @@ void run_server() {
   }
 }
 
-/// Get a random offset in the registered buffer with at least kMsgSize space
-size_t get_random_offset(pcg64_fast& pcg) {
+/// Get a random offset in the registered buffer with at least msg_size space
+size_t get_random_offset(pcg64_fast& pcg, size_t msg_size) {
   size_t iters = 0;
   while (true) {
     size_t rand_offset = pcg() % kBufSize;
-    if (likely(kBufSize - rand_offset > kMsgSize)) return rand_offset;
+    if (likely(kBufSize - rand_offset > msg_size)) return rand_offset;
     iters++;
     if (unlikely(iters > 10)) printf("Random offset took over 10 iters\n");
   }
@@ -137,12 +136,17 @@ void run_client() {
 
   size_t num_iters = 0;
   pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
+  size_t msg_size = kMinMsgSize;
 
   while (true) {
     if (num_iters % KB(128) == 0 && num_iters > 0) {
-      printf("avg %.1f us, 50 %.1f us, 99 %.1f us\n", latency.avg() / 10.0,
-             latency.perc(.50) / 10.0, latency.perc(.99) / 10.0);
+      printf("msg_size %zu, avg %.1f us, 50 %.1f us, 99 %.1f us\n", msg_size,
+             latency.avg() / 10.0, latency.perc(.50) / 10.0,
+             latency.perc(.99) / 10.0);
       latency.reset();
+
+      msg_size *= 2;
+      if (msg_size > kMaxMsgSize) msg_size = kMinMsgSize;
     }
 
     struct timespec start;
@@ -150,25 +154,27 @@ void run_client() {
 
     // WRITE
     for (size_t i = 0; i < kNumWritesToFlush; i++) {
-      const size_t remote_offset = get_random_offset(pcg);
+      const size_t remote_offset = get_random_offset(pcg, msg_size);
 
       write_sge[i].addr =
-          reinterpret_cast<uint64_t>(&cb->conn_buf[i * kMsgSize]);
+          reinterpret_cast<uint64_t>(&cb->conn_buf[i * msg_size]);
       *reinterpret_cast<size_t*>(write_sge[i].addr) = num_iters;
-      write_sge[i].length = kMsgSize;
+      write_sge[i].length = msg_size;
       write_sge[i].lkey = cb->conn_buf_mr->lkey;
 
       write_wr[i].opcode = IBV_WR_RDMA_WRITE;
       write_wr[i].num_sge = 1;
       write_wr[i].sg_list = &write_sge[i];
-      write_wr[i].send_flags = 0 | IBV_SEND_INLINE;  // Unsignaled
+      write_wr[i].send_flags = 0 /* unsignaled */;
+      if (msg_size <= kHrdMaxInline) write_wr[i].send_flags |= IBV_SEND_INLINE;
+
       write_wr[i].wr.rdma.remote_addr = srv_qp->buf_addr + remote_offset;
       write_wr[i].wr.rdma.rkey = srv_qp->rkey;
 
       // READ
       read_sge[i].addr =
-          reinterpret_cast<uint64_t>(&cb->conn_buf[i * kMsgSize]);
-      read_sge[i].length = kMsgSize;
+          reinterpret_cast<uint64_t>(&cb->conn_buf[i * msg_size]);
+      read_sge[i].length = 8;  // Indepenent of write size
       read_sge[i].lkey = cb->conn_buf_mr->lkey;
 
       read_wr[i].opcode = IBV_WR_RDMA_READ;

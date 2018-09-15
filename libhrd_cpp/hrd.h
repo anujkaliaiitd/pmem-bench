@@ -22,7 +22,11 @@
 #include <thread>
 
 static constexpr size_t kRoCE = false;  ///< Use RoCE
-static constexpr size_t kHrdMaxInline = 16;
+
+// Maximum inline data so that WQEs fit in two cache lines (max_sge = 1):
+// * mlx4, RC: 88
+// * mlx4, UD: 60
+static constexpr size_t kHrdMaxInline = 88;
 static constexpr size_t kHrdSQDepth = 128;   ///< Depth of all SEND queues
 static constexpr size_t kHrdRQDepth = 2048;  ///< Depth of all RECV queues
 
