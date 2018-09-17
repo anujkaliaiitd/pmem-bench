@@ -1,4 +1,4 @@
-exe="./main"
+exe="./bench"
 chmod +x $exe
 
 num_threads=1

@@ -28,7 +28,7 @@ static constexpr const char* kPmemFile = "/dev/dax0.0";
 static constexpr size_t kNumWritesToFlush = 1;
 
 // If true, we issue only one signaled write and no reads
-static constexpr bool kJustAWrite = true;
+static constexpr bool kJustAWrite = false;
 
 uint8_t* get_pmem_buf() {
   int fd = open(kPmemFile, O_RDWR);
