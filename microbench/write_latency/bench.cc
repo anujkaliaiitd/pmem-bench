@@ -6,7 +6,7 @@
 #include <time.h>
 #include "../../common.h"
 
-static constexpr size_t kWriteSize = 512;
+static constexpr size_t kWriteSize = 1024;
 static constexpr size_t kNumIters = 1000000;
 
 static constexpr size_t kMinAEPLatCycles = 1;
@@ -43,7 +43,7 @@ int main() {
       mfence();
       hist.record_value(rdtscp() - start_tsc);
 
-      offset += 512;
+      offset += kWriteSize;
       if (offset + kWriteSize >= mapped_len) offset = 0;
     }
 
