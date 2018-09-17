@@ -24,7 +24,7 @@ fi
 
 # Check for non-gdb mode
 if [ "$#" -eq 1 ]; then
-  sudo -E numactl --cpunodebind=0 --membind=0 $exe --is_client 1
+  sudo -E numactl --physcpubind=0 --membind=0 $exe --is_client 1
 fi
 
 # Check for gdb mode

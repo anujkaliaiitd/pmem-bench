@@ -19,7 +19,7 @@ echo "Server: memcached server is open for business on port 11211"
 
 # Check for non-gdb mode
 if [ "$#" -eq 0 ]; then
-  numactl --cpunodebind=0 --membind=0 $exe --is_client 0
+  numactl --physcpubind=0 --membind=0 $exe --is_client 0
 fi
 
 # Check for gdb mode

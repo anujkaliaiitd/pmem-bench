@@ -14,7 +14,7 @@
 
 DEFINE_uint64(is_client, 0, "Is this process a client?");
 
-static constexpr size_t kBufSize = MB(2);  // Registered buffer size
+static constexpr size_t kBufSize = KB(128);  // Registered buffer size
 static constexpr size_t kMinWriteSize = 64;
 static constexpr size_t kMaxWriteSize = 1024;
 
@@ -28,7 +28,7 @@ static constexpr const char* kPmemFile = "/dev/dax0.0";
 static constexpr size_t kNumWritesToFlush = 1;
 
 // If true, we issue only one signaled write and no reads
-static constexpr bool kJustAWrite = false;
+static constexpr bool kJustAWrite = true;
 
 uint8_t* get_pmem_buf() {
   int fd = open(kPmemFile, O_RDWR);
@@ -149,8 +149,8 @@ void run_client() {
     struct timespec start;
     clock_gettime(CLOCK_REALTIME, &start);
 
-    // Enter the loop below with space for (kNumWritesToFlush + 1) chunks. We
-    // don't use the last chunk because we read from there.
+    // Enter the loop below with room for at least (kNumWritesToFlush + 1)
+    // chunks. We don't use the last chunk because we read from there.
     if (write_chunk_idx + 1 >=
         (kBufSize / write_size) - kNumWritesToFlush - 1) {
       write_chunk_idx = 0;
@@ -187,7 +187,8 @@ void run_client() {
       read_wr[i].num_sge = 1;
       read_wr[i].sg_list = &read_sge[i];
       read_wr[i].send_flags = 0;  // Unsignaled. The last read is signaled.
-      read_wr[i].wr.rdma.remote_addr = srv_qp->buf_addr + remote_offset;
+      read_wr[i].wr.rdma.remote_addr =
+          srv_qp->buf_addr + kBufSize - sizeof(size_t);
       read_wr[i].wr.rdma.rkey = srv_qp->rkey;
 
       // Make a chain
