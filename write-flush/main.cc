@@ -13,10 +13,12 @@
 #include "libhrd_cpp/hrd.h"
 
 DEFINE_uint64(is_client, 0, "Is this process a client?");
-static constexpr size_t kBufSize = KB(64);  // Registered buffer size
-static constexpr size_t kMinMsgSize = 64;
-static constexpr size_t kMaxMsgSize = 1024;
 
+static constexpr size_t kBufSize = MB(2);  // Registered buffer size
+static constexpr size_t kMinWriteSize = 64;
+static constexpr size_t kMaxWriteSize = 1024;
+
+// If true, we use a devdax-mapped buffer. If false, we use DRAM hugepages.
 static constexpr bool kUsePmem = true;
 static constexpr const char* kPmemFile = "/dev/dax0.0";
 
@@ -74,7 +76,7 @@ void run_server() {
   while (true) sleep(1);
 }
 
-/// Get a random offset in the registered buffer aligned to a 256-byte boundary
+/// Get a random offset in the registered buffer with at least \p msg_size room
 size_t get_256_aligned_random_offset(pcg64_fast& pcg, size_t msg_size) {
   size_t iters = 0;
   while (true) {
@@ -120,53 +122,65 @@ void run_client() {
   struct ibv_sge write_sge[kArrSz], read_sge[kArrSz];
   struct ibv_wc wc;
 
+  size_t write_size = kMinWriteSize;  // Increases by powers of two
   size_t num_iters = 0;
-  size_t chunk_idx = 0;  // Remote mem is divided into chunks of size = msg_size
-  size_t msg_size = kMinMsgSize;  // Increases by powers of two
+
+  // Remote memory is divided into write_size chunks. The RDMA writes use these
+  // chunks in order.
+  size_t write_chunk_idx = 0;
 
   // pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
 
-  printf("#msg_size median_us 5th_us 99th_us 999th_us\n");  // Stats header
+  printf("#write_size median_us 5th_us 99th_us 999th_us\n");  // Stats header
   while (true) {
     if (num_iters == KB(256)) {
-      printf("%zu %.1f %.1f %.1f %.1f\n", msg_size, latency.perc(.50) / 10.0,
+      printf("%zu %.1f %.1f %.1f %.1f\n", write_size, latency.perc(.50) / 10.0,
              latency.perc(.05) / 10.0, latency.perc(.99) / 10.0,
              latency.perc(.999) / 10.0);
       latency.reset();
 
-      msg_size *= 2;
-      if (msg_size > kMaxMsgSize) msg_size = kMinMsgSize;
+      write_size *= 2;
+      if (write_size > kMaxWriteSize) write_size = kMinWriteSize;
 
-      chunk_idx = 0;
       num_iters = 0;
+      write_chunk_idx = 0;
     }
 
     struct timespec start;
     clock_gettime(CLOCK_REALTIME, &start);
 
+    // Enter the loop below with space for (kNumWritesToFlush + 1) chunks. We
+    // don't use the last chunk because we read from there.
+    if (write_chunk_idx + 1 >=
+        (kBufSize / write_size) - kNumWritesToFlush - 1) {
+      write_chunk_idx = 0;
+    }
+
     // WRITE
     for (size_t i = 0; i < kNumWritesToFlush; i++) {
-      if (chunk_idx * msg_size >= kBufSize) chunk_idx = 0;
-      const size_t remote_offset = chunk_idx * msg_size;
+      const size_t remote_offset = write_chunk_idx * write_size;
+      write_chunk_idx++;
 
       write_sge[i].addr =
-          reinterpret_cast<uint64_t>(&cb->conn_buf[i * msg_size]);
-      write_sge[i].length = msg_size;
+          reinterpret_cast<uint64_t>(&cb->conn_buf[i * write_size]);
+      write_sge[i].length = write_size;
       write_sge[i].lkey = cb->conn_buf_mr->lkey;
 
       write_wr[i].opcode = IBV_WR_RDMA_WRITE;
       write_wr[i].num_sge = 1;
       write_wr[i].sg_list = &write_sge[i];
       write_wr[i].send_flags = 0 /* unsignaled */;
-      if (msg_size <= kHrdMaxInline) write_wr[i].send_flags |= IBV_SEND_INLINE;
+      if (write_size <= kHrdMaxInline) {
+        write_wr[i].send_flags |= IBV_SEND_INLINE;
+      }
 
       write_wr[i].wr.rdma.remote_addr = srv_qp->buf_addr + remote_offset;
       write_wr[i].wr.rdma.rkey = srv_qp->rkey;
 
-      // READ
+      // READ. We can read from any address.
       read_sge[i].addr =
-          reinterpret_cast<uint64_t>(&cb->conn_buf[i * msg_size]);
-      read_sge[i].length = 8;  // Indepenent of write size
+          reinterpret_cast<uint64_t>(&cb->conn_buf[kBufSize - sizeof(size_t)]);
+      read_sge[i].length = sizeof(size_t);  // Indepenent of write size
       read_sge[i].lkey = cb->conn_buf_mr->lkey;
 
       read_wr[i].opcode = IBV_WR_RDMA_READ;
