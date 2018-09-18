@@ -3,10 +3,11 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include "../../common.h"
 
-static constexpr size_t kWriteSize = 1024;
+static constexpr size_t kWriteSize = 512;
 static constexpr size_t kNumIters = 1000000;
 
 static constexpr size_t kMinAEPLatCycles = 1;
@@ -28,7 +29,7 @@ int main() {
   HdrHistogram hist(kMinAEPLatCycles, kMaxAEPLatCycles, kAEPLatPrecision);
   size_t offset = 0;
 
-  while (true) {
+  for (size_t msr = 0; msr < 10; msr++) {
     hist.reset();
     struct timespec bench_start;
     clock_gettime(CLOCK_REALTIME, &bench_start);
@@ -48,8 +49,9 @@ int main() {
     }
 
     const double bench_seconds = sec_since(bench_start);
-    printf("Throughput of writes = %.2f M/s\n",
-           kNumIters / (bench_seconds * 1000000));
+    printf("Throughput of writes = %.2f M ops/s, %.2f GB/s\n",
+           kNumIters / (bench_seconds * 1000000),
+           kNumIters * kWriteSize / (bench_seconds * 1000000000));
     printf("Latency (ns): 50 %.1f, 99 %.1f, 99.9 %.1f\n",
            hist.percentile(50) / freq_ghz, hist.percentile(99) / freq_ghz,
            hist.percentile(99.9) / freq_ghz);
