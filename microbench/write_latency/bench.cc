@@ -6,11 +6,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <x86intrin.h>
 #include <algorithm>
 #include <vector>
+#include "../../common.h"
 
-static constexpr size_t kWriteSize = 1024;
+static constexpr size_t kWriteSize = 512;
 static constexpr size_t kNumIters = 1000000;
 
 int main() {
@@ -35,25 +35,18 @@ int main() {
 
     // Real work
     for (size_t i = 0; i < kNumIters; i++) {
-      size_t start_tsc = __rdtsc();
-      _mm_mfence();
-      // pmem_memset_persist(&pbuf[file_offset], msr + i, kWriteSize);
+      size_t start_tsc = rdtsc();
+      mfence();
       pmem_memmove_persist(&pbuf[file_offset], data, kWriteSize);
-      _mm_mfence();
+      mfence();
 
-      latency_vec.push_back(__rdtsc() - start_tsc);
+      latency_vec.push_back(rdtsc() - start_tsc);
 
       file_offset += kWriteSize;
       if (file_offset + kWriteSize >= mapped_len) file_offset = 0;
     }
 
-    // Statistics
-    struct timespec bench_end;
-    clock_gettime(CLOCK_REALTIME, &bench_end);
-    double bench_seconds =
-        (bench_end.tv_sec - bench_start.tv_sec) +
-        (bench_end.tv_nsec - bench_start.tv_nsec) / 1000000000.0;
-
+    double bench_seconds = sec_since(bench_start);
     printf("Throughput of writes = %.2f M ops/s, %.2f GB/s\n",
            kNumIters / (bench_seconds * 1000000),
            kNumIters * kWriteSize / (bench_seconds * 1000000000));
