@@ -11,8 +11,9 @@
 
 DEFINE_uint64(num_threads, 0, "Number of threads");
 
-static constexpr size_t kFileSizeGB = 256;  // The expected file size
-static constexpr size_t kFileSizeBytes = kFileSizeGB * GB(1);
+static constexpr size_t kPmemFileSizeGB = 256;  // The expected file size
+static constexpr size_t kPmemFileSize = kPmemFileSizeGB * GB(1);
+static constexpr bool kMeasureLatency = false;
 double freq_ghz = 0.0;
 static size_t align64(size_t x) { return x - x % 64; }
 
@@ -24,14 +25,19 @@ static constexpr int kMaxPmemLatCycles = MB(1);  // Max pmem latency in cycles
 size_t get_random_offset_with_space(pcg64_fast &pcg, size_t space) {
   size_t iters = 0;
   while (true) {
-    size_t rand_offset = pcg() % kFileSizeBytes;
-    if (kFileSizeBytes - rand_offset > space) return rand_offset;
+    size_t rand_offset = pcg() % kPmemFileSize;
+    if (kPmemFileSize - rand_offset > space) return rand_offset;
     iters++;
     if (iters > 2) printf("Random offset took over 2 iters\n");
   }
 }
 
-/// Latency of random reads
+void bench_seq_read_tput(uint8_t *pbuf, size_t thread_id) {
+  _unused(pbuf);
+  _unused(thread_id);
+}
+
+/// Random read latency
 void bench_rand_read_lat(uint8_t *pbuf, size_t thread_id) {
   static constexpr size_t kNumIters = MB(1);
 
@@ -44,7 +50,7 @@ void bench_rand_read_lat(uint8_t *pbuf, size_t thread_id) {
 
     for (size_t i = 0; i < kNumIters; i++) {
       // Choose a random dependent byte
-      size_t rand_addr = (pcg() + sum % 8) % kFileSizeBytes;
+      size_t rand_addr = (pcg() + sum % 8) % kPmemFileSize;
       sum += pbuf[rand_addr];
     }
 
@@ -54,7 +60,7 @@ void bench_rand_read_lat(uint8_t *pbuf, size_t thread_id) {
   }
 }
 
-/// Tput of random reads
+/// Random read throughput
 void bench_rand_read_tput(uint8_t *pbuf, size_t thread_id) {
   static constexpr size_t kBatchSize = 10;
   static constexpr size_t kNumIters = MB(4);
@@ -69,7 +75,7 @@ void bench_rand_read_tput(uint8_t *pbuf, size_t thread_id) {
     for (size_t i = 0; i < kNumIters / kBatchSize; i++) {
       size_t offset[kBatchSize];
       for (size_t j = 0; j < kBatchSize; j++) {
-        offset[j] = pcg() % kFileSizeBytes;
+        offset[j] = pcg() % kPmemFileSize;
       }
       for (size_t j = 0; j < kBatchSize; j++) sum += pbuf[offset[j]];
     }
@@ -80,13 +86,13 @@ void bench_rand_read_tput(uint8_t *pbuf, size_t thread_id) {
   }
 }
 
-/// Throughput of random batched persistent writes
+/// Random write throughput
 void bench_rand_write_tput(uint8_t *pbuf, size_t thread_id) {
   static constexpr size_t kBatchSize = 10;
   static constexpr size_t kNumIters = MB(4);
 
   // Write to non-overlapping addresses
-  const size_t bytes_per_thread = kFileSizeBytes / FLAGS_num_threads;
+  const size_t bytes_per_thread = kPmemFileSize / FLAGS_num_threads;
   const size_t base_addr = thread_id * bytes_per_thread;
 
   pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
@@ -113,13 +119,13 @@ void bench_rand_write_tput(uint8_t *pbuf, size_t thread_id) {
   }
 }
 
-/// Latency of random persistent writes
+/// Random write latency
 void bench_rand_write_lat(uint8_t *pbuf, size_t thread_id) {
   static constexpr size_t kNumIters = MB(2);
   pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
 
   // Write to non-overlapping addresses
-  const size_t bytes_per_thread = kFileSizeBytes / FLAGS_num_threads;
+  const size_t bytes_per_thread = kPmemFileSize / FLAGS_num_threads;
   const size_t base_addr = thread_id * bytes_per_thread;
 
   while (true) {
@@ -135,130 +141,14 @@ void bench_rand_write_lat(uint8_t *pbuf, size_t thread_id) {
   }
 }
 
-/// Latency of persisting to the same byte in a file. Useful for timestamps etc.
-/// The time measurement in this benchmark makes sense only with gcc
-/// optimizations. Without any optimization flags, it's way off.
-void bench_same_byte_write_lat(uint8_t *_pbuf, size_t) {
-  static constexpr size_t kNumWarmupIters = 128;
-  static constexpr size_t kNumExperiments = 128;
-  auto *pbuf = reinterpret_cast<size_t *>(_pbuf);
-
-  static constexpr size_t kMaxNumWrites = 24;
-  size_t ns_arr[kMaxNumWrites] = {0};
-
-  // Allow using a DRAM buffer to measure the overhead of mfence()
-  static constexpr bool kUseDramBuffer = false;
-  static constexpr size_t kDramBufferSize = KB(4);
-  if (kUseDramBuffer) {
-    pbuf = reinterpret_cast<size_t *>(malloc(kDramBufferSize));
-    memset(pbuf, 0, kDramBufferSize);
-  }
-
-  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
-
-  // We average our measurements over kNumExperiments experiments
-  for (size_t exp = 0; exp < kNumExperiments; exp++) {
-    // In each exp, we measure the latency of num_writes writes to byte_idx
-    for (size_t num_writes = 1; num_writes < kMaxNumWrites; num_writes++) {
-      const size_t byte_idx_pmem = pcg() % (kFileSizeBytes / sizeof(size_t));
-
-      // Warmup
-      if (!kUseDramBuffer) {
-        for (size_t i = 0; i < kNumWarmupIters; i++) {
-          pbuf[byte_idx_pmem] = i;
-          pmem_persist(&pbuf[byte_idx_pmem], sizeof(size_t));
-        }
-        nano_sleep(100000, freq_ghz);  // 100 microseconds
-      }
-
-      size_t cycles_start = rdtscp();
-      mfence();
-
-      // Real work
-      for (size_t j = 0; j < num_writes; j++) {
-        if (!kUseDramBuffer) {
-          pbuf[byte_idx_pmem] = num_writes + j;
-          pmem_persist(&pbuf[byte_idx_pmem], sizeof(size_t));
-        } else {
-          pbuf[pcg() % (kDramBufferSize / sizeof(size_t))] =
-              exp * num_writes + j;
-        }
-      }
-
-      mfence();
-      ns_arr[num_writes] += to_nsec(rdtscp() - cycles_start, freq_ghz);
-    }
-  }
-
-  printf("num_writes, nanoseconds\n");
-  for (size_t i = 1; i < kMaxNumWrites; i++) {
-    printf("%zu, %zu\n", i, ns_arr[i] / kNumExperiments);
-  }
-
-  if (kUseDramBuffer) {
-    printf("Random DRAM buffer probe = %zu\n",
-           pbuf[pcg() % (kDramBufferSize / sizeof(size_t))]);
-  }
-}
-
-/// Throughput for persisting to the same byte
-void bench_same_byte_write_tput(uint8_t *_pbuf, size_t) {
-  static constexpr size_t kWarmupNumIters = MB(1);
-  static constexpr size_t kNumIters = MB(1);
-  auto *pbuf = reinterpret_cast<size_t *>(_pbuf);
-
-  // Warmup
-  for (size_t i = 0; i < kWarmupNumIters; i++) {
-    pbuf[0] = i;
-    pmem_persist(pbuf, sizeof(size_t));
-  }
-  nano_sleep(10000, freq_ghz);  // 10 microseconds
-
-  struct timespec bench_start;
-  clock_gettime(CLOCK_REALTIME, &bench_start);
-
-  // Real work
-  for (size_t i = 0; i < kNumIters; i++) {
-    pbuf[0] = i;
-    pmem_persist(pbuf, sizeof(size_t));
-  }
-  double bench_seconds = sec_since(bench_start);
-
-  printf("Througput of writes to same byte = %.2f M/s\n",
-         kNumIters / (bench_seconds * 1000000));
-}
-
-/// Throughput for persisting to the a buffer with cacheline-aligned slots
-void bench_circular_buffer_write_tput(uint8_t *pbuf, size_t) {
-  static constexpr size_t kNumIters = MB(1);
-  static constexpr size_t kChunkSize = 64;
-  static constexpr size_t kNumChunks = 32;
-  const uint8_t data[kChunkSize] = {0};
-
-  while (true) {
-    struct timespec bench_start;
-    clock_gettime(CLOCK_REALTIME, &bench_start);
-
-    // Real work
-    for (size_t i = 0; i < kNumIters; i++) {
-      size_t chunk_idx = i % kNumChunks;
-      pmem_memcpy_persist(&pbuf[chunk_idx * kChunkSize], data, kChunkSize);
-    }
-
-    double bench_seconds = sec_since(bench_start);
-    printf("Througput of writes circular buffer chunks = %.2f M/s\n",
-           kNumIters / (bench_seconds * 1000000));
-  }
-}
-
-/// Bandwidth of large writes
-void bench_write_sequential(uint8_t *pbuf, size_t thread_id) {
+/// Sequential writes
+void bench_seq_write(uint8_t *pbuf, size_t thread_id) {
   static constexpr size_t kCopySize = MB(256);
   void *dram_src_buf = malloc(kCopySize);
   memset(dram_src_buf, 0, kCopySize);
 
   // Write to non-overlapping addresses
-  const size_t bytes_per_thread = kFileSizeBytes / FLAGS_num_threads;
+  const size_t bytes_per_thread = kPmemFileSize / FLAGS_num_threads;
   const size_t base_addr = thread_id * bytes_per_thread;
   size_t cur_base = base_addr;
 
@@ -278,106 +168,6 @@ void bench_write_sequential(uint8_t *pbuf, size_t thread_id) {
   }
 
   free(dram_src_buf);
-}
-
-/// Compare the time to write a contiguous "block" (256 bytes) of pmem, to
-/// to the time to write to discontiguous but smaller cache-line chunks.
-void bench_write_block_size(uint8_t *pbuf, size_t) {
-  // Single-threaded for now
-  static constexpr size_t kAEPBlockSize = 256;
-  static constexpr size_t kNumSplits = 4;
-  static constexpr size_t kIters = 1000000;
-  void *dram_src_buf = malloc(kAEPBlockSize);
-  memset(dram_src_buf, 0, kAEPBlockSize);
-
-  struct timespec start;
-
-  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
-
-  while (true) {
-    {
-      // One contiguous write
-      clock_gettime(CLOCK_REALTIME, &start);
-      size_t cur_base =
-          get_random_offset_with_space(pcg, kAEPBlockSize * kIters);
-      for (size_t i = 0; i < kIters; i++) {
-        pmem_memcpy_persist(&pbuf[cur_base], dram_src_buf, kAEPBlockSize);
-        cur_base += kAEPBlockSize;
-      }
-
-      double tot_nsec = ns_since(start);
-      printf("Time per contiguous write = %.2f ns\n", tot_nsec / kIters);
-    }
-
-    {
-      // Multiple discontigous writes
-      static constexpr size_t kSplitCopySz = kAEPBlockSize / kNumSplits;
-      clock_gettime(CLOCK_REALTIME, &start);
-
-      // Assign bases to each writer. We will write to a buffer of size
-      // (kAEPBlockSize * kIters). This buffer is split into kNumSplits chunks,
-      // one per writer.
-      size_t cur_base[kNumSplits];
-      size_t starting_base =
-          get_random_offset_with_space(pcg, kAEPBlockSize * kIters);
-      for (size_t j = 0; j < kNumSplits; j++) {
-        cur_base[j] = starting_base + j * (kSplitCopySz * kIters);
-      }
-
-      for (size_t i = 0; i < kIters; i++) {
-        for (size_t j = 0; j < kNumSplits; j++) {
-          pmem_memcpy_nodrain(&pbuf[cur_base[j]], dram_src_buf, kSplitCopySz);
-          cur_base[j] += kSplitCopySz;
-        }
-        pmem_drain();
-      }
-
-      double tot_nsec = ns_since(start);
-      printf("Time per %zu discontiguous writes = %.2f ns\n", kNumSplits,
-             tot_nsec / kIters);
-    }
-
-    {
-      // Try random writes just for funsies
-      clock_gettime(CLOCK_REALTIME, &start);
-
-      for (size_t i = 0; i < kIters; i++) {
-        for (size_t j = 0; j < kNumSplits; j++) {
-          size_t off = get_random_offset_with_space(pcg, 64);
-          pmem_memcpy_nodrain(&pbuf[off], dram_src_buf, 64);
-        }
-        pmem_drain();
-      }
-
-      double tot_nsec = ns_since(start);
-      printf("Time per %zu random writes = %.2f ns\n", kNumSplits,
-             tot_nsec / kIters);
-    }
-  }
-
-  free(dram_src_buf);
-}
-
-/// Latency of low load sequential writes
-void bench_low_load_sequential_writes(uint8_t *pbuf, size_t) {
-  static constexpr size_t kNumIters = MB(1);
-  static constexpr size_t kWriteSize = 128;
-  uint8_t buf[kWriteSize];
-  size_t tot_ns = 0;
-
-  while (true) {
-    for (size_t i = 0; i < kNumIters; i++) {
-      size_t start = rdtsc();
-      pmem_memcpy_persist(&pbuf[i * kWriteSize], buf, kWriteSize);
-      tot_ns += to_nsec(rdtscp() - start, freq_ghz);
-
-      nano_sleep(1000, freq_ghz);
-    }
-
-    printf("Latency of unloaded persistent sequential writes = %zu ns\n",
-           tot_ns / kNumIters);
-    tot_ns = 0;
-  }
 }
 
 // Write to the whole file to "map it in", whatever that means
@@ -433,7 +223,7 @@ int main(int argc, char **argv) {
 
   rt_assert(pbuf != nullptr,
             "pmem_map_file() failed. " + std::string(strerror(errno)));
-  rt_assert(mapped_len == kFileSizeGB * GB(1),
+  rt_assert(mapped_len == kPmemFileSizeGB * GB(1),
             "Incorrect file size " + std::to_string(mapped_len));
   rt_assert(reinterpret_cast<size_t>(pbuf) % 4096 == 0,
             "Mapped buffer isn't page-aligned");
@@ -450,12 +240,7 @@ int main(int argc, char **argv) {
     // threads[i] = std::thread(bench_rand_read_tput, pbuf, i);
     // threads[i] = std::thread(bench_rand_write_lat, pbuf, i);
     // threads[i] = std::thread(bench_rand_write_tput, pbuf, i);
-    // threads[i] = std::thread(bench_same_byte_write_lat, pbuf, i);
-    // threads[i] = std::thread(bench_same_byte_write_tput, pbuf, i);
-    // threads[i] = std::thread(bench_circular_buffer_write_tput, pbuf, i);
-    // threads[i] = std::thread(bench_write_sequential, pbuf, i);
-    // threads[i] = std::thread(bench_write_block_size, pbuf, i);
-    threads[i] = std::thread(bench_low_load_sequential_writes, pbuf, i);
+    threads[i] = std::thread(bench_seq_write, pbuf, i);
   }
 
   for (auto &thread : threads) thread.join();

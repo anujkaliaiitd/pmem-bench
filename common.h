@@ -6,6 +6,8 @@
 #include <stdexcept>
 #include <string>
 
+#define _unused(x) ((void)(x))  // Make production build happy
+
 #define KB(x) (static_cast<size_t>(x) << 10)
 #define MB(x) (static_cast<size_t>(x) << 20)
 #define GB(x) (static_cast<size_t>(x) << 30)
