@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <libpmem.h>
+#include <malloc.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,11 +10,11 @@
 #include <algorithm>
 #include <vector>
 
-static constexpr size_t kWriteSize = 512;
+static constexpr size_t kWriteSize = 1024;
 static constexpr size_t kNumIters = 1000000;
 
 int main() {
-  const uint8_t data[kWriteSize] = {0};
+  uint8_t *data = reinterpret_cast<uint8_t *>(memalign(4096, kWriteSize));
 
   size_t mapped_len;
   int is_pmem;
@@ -35,7 +36,8 @@ int main() {
     for (size_t i = 0; i < kNumIters; i++) {
       size_t start_tsc = __rdtsc();
       _mm_mfence();
-      pmem_memcpy_persist(&pbuf[offset], data, kWriteSize);
+      pmem_memset_persist(&pbuf[offset], msr + i, kWriteSize);
+      // pmem_memcpy_persist(&pbuf[offset], data, kWriteSize);
       _mm_mfence();
 
       latency_vec.push_back(__rdtsc() - start_tsc);
