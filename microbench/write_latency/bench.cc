@@ -23,11 +23,12 @@ int main() {
   assert(pbuf != nullptr);
   assert(mapped_len >= kWriteSize * kNumIters);
 
-  size_t offset = 0;
+  size_t file_offset = 0;
   std::vector<size_t> latency_vec;
   latency_vec.reserve(kNumIters);
 
   for (size_t msr = 0; msr < 10; msr++) {
+    // Initialize measurement
     latency_vec.clear();
     struct timespec bench_start;
     clock_gettime(CLOCK_REALTIME, &bench_start);
@@ -36,16 +37,17 @@ int main() {
     for (size_t i = 0; i < kNumIters; i++) {
       size_t start_tsc = __rdtsc();
       _mm_mfence();
-      pmem_memset_persist(&pbuf[offset], msr + i, kWriteSize);
-      // pmem_memcpy_persist(&pbuf[offset], data, kWriteSize);
+      // pmem_memset_persist(&pbuf[file_offset], msr + i, kWriteSize);
+      pmem_memmove_persist(&pbuf[file_offset], data, kWriteSize);
       _mm_mfence();
 
       latency_vec.push_back(__rdtsc() - start_tsc);
 
-      offset += kWriteSize;
-      if (offset + kWriteSize >= mapped_len) offset = 0;
+      file_offset += kWriteSize;
+      if (file_offset + kWriteSize >= mapped_len) file_offset = 0;
     }
 
+    // Statistics
     struct timespec bench_end;
     clock_gettime(CLOCK_REALTIME, &bench_end);
     double bench_seconds =
