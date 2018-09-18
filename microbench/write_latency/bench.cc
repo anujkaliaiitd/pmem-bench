@@ -7,7 +7,7 @@
 #include <time.h>
 #include "../../common.h"
 
-static constexpr size_t kWriteSize = 512;
+static constexpr size_t kWriteSize = 1024;
 static constexpr size_t kNumIters = 1000000;
 
 static constexpr size_t kMinAEPLatCycles = 1;
