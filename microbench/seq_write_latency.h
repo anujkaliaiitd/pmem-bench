@@ -18,6 +18,7 @@ void bench_seq_write_latency(uint8_t *pbuf) {
 
     for (size_t size = kMinWriteSz; size <= kMaxWriteSz; size *= 2) {
       latency_vec.clear();
+      file_offset = roundup<256>(file_offset);
 
       for (size_t i = 0; i < kNumIters; i++) {
         size_t start_tsc = rdtsc();
