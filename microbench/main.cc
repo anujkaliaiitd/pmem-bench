@@ -190,13 +190,14 @@ int main(int argc, char **argv) {
       for (size_t i = 0; i < FLAGS_num_threads; i++) {
         threads[i] =
             std::thread(bench_seq_write, pbuf, i, copy_sz, &avg_tput_GBps[i]);
+        bind_to_core(threads[i], kNumaNode, i);
       }
       for (auto &t : threads) t.join();
 
       double total_tput = 0.0;
       for (size_t i = 0; i < FLAGS_num_threads; i++)
         total_tput += avg_tput_GBps[i];
-      dat_data << std::to_string(total_tput) << " ";
+      dat_data << std::setprecision(2) << total_tput << " ";
     }
 
     printf("%s\n", dat_header.str().c_str());

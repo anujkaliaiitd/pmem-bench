@@ -2,9 +2,12 @@
 #define likely(x) __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
 
+#include <numa.h>
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <vector>
 
 #define _unused(x) ((void)(x))  // Make production build happy
 
@@ -221,3 +224,40 @@ class HdrHistogram {
  private:
   hdr_histogram *hist = nullptr;
 };
+
+/// Return the number of logical cores per NUMA node
+static size_t num_lcores_per_numa_node() {
+  return static_cast<size_t>(numa_num_configured_cpus() /
+                             numa_num_configured_nodes());
+}
+
+/// Return a list of logical cores in \p numa_node
+static std::vector<size_t> get_lcores_for_numa_node(size_t numa_node) {
+  rt_assert(numa_node <= static_cast<size_t>(numa_max_node()));
+
+  std::vector<size_t> ret;
+  size_t num_lcores = static_cast<size_t>(numa_num_configured_cpus());
+
+  for (size_t i = 0; i < num_lcores; i++) {
+    if (numa_node == static_cast<size_t>(numa_node_of_cpu(i))) {
+      ret.push_back(i);
+    }
+  }
+
+  return ret;
+}
+
+/// Bind \p thread to core with index \p numa_local_index on \p numa_node
+static void bind_to_core(std::thread &thread, size_t numa_node,
+                         size_t numa_local_index) {
+  cpu_set_t cpuset;
+  CPU_ZERO(&cpuset);
+
+  auto lcore_vec = get_lcores_for_numa_node(numa_node);
+  size_t global_index = lcore_vec.at(numa_local_index);
+
+  CPU_SET(global_index, &cpuset);
+  int rc = pthread_setaffinity_np(thread.native_handle(), sizeof(cpu_set_t),
+                                  &cpuset);
+  rt_assert(rc == 0, "Error setting thread affinity");
+}

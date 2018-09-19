@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <iomanip>
 #include <pcg/pcg_random.hpp>
 #include <sstream>
 #include <thread>
@@ -26,6 +27,8 @@ static size_t align64(size_t x) { return x - x % 64; }
 static constexpr int kHdrPrecision = 2;          // Precision for hdr histograms
 static constexpr int kMinPmemLatCycles = 1;      // Min pmem latency in cycles
 static constexpr int kMaxPmemLatCycles = MB(1);  // Max pmem latency in cycles
+
+static constexpr size_t kNumaNode = 0;
 
 /// Get a random offset in the file with at least \p space after it
 size_t get_random_offset_with_space(pcg64_fast &pcg, size_t space) {
