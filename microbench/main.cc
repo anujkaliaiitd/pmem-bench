@@ -1,39 +1,8 @@
-#include <errno.h>
-#include <gflags/gflags.h>
-#include <libpmem.h>
-#include <malloc.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
-#include <pcg/pcg_random.hpp>
-#include <thread>
+#include "main.h"
 #include "../common.h"
 
-DEFINE_uint64(num_threads, 0, "Number of threads");
-
-static constexpr const char *kPmemFile = "/dev/dax0.0";
-static constexpr size_t kPmemFileSizeGB = 256;  // The expected file size
-static constexpr size_t kPmemFileSize = kPmemFileSizeGB * GB(1);
-
-static constexpr bool kMeasureLatency = false;
-double freq_ghz = 0.0;
-static size_t align64(size_t x) { return x - x % 64; }
-
-static constexpr int kHdrPrecision = 2;          // Precision for hdr histograms
-static constexpr int kMinPmemLatCycles = 1;      // Min pmem latency in cycles
-static constexpr int kMaxPmemLatCycles = MB(1);  // Max pmem latency in cycles
-
-/// Get a random offset in the file with at least \p space after it
-size_t get_random_offset_with_space(pcg64_fast &pcg, size_t space) {
-  size_t iters = 0;
-  while (true) {
-    size_t rand_offset = pcg() % kPmemFileSize;
-    if (kPmemFileSize - rand_offset > space) return rand_offset;
-    iters++;
-    if (iters > 2) printf("Random offset took over 2 iters\n");
-  }
-}
+// Benchmark impl
+#include "seq_write.h"
 
 void bench_seq_read_tput(uint8_t *pbuf, size_t thread_id) {
   _unused(pbuf);
@@ -144,43 +113,6 @@ void bench_rand_write_lat(uint8_t *pbuf, size_t thread_id) {
   }
 }
 
-/// Sequential writes
-void bench_seq_write(uint8_t *pbuf, size_t thread_id, size_t copy_sz) {
-  // We perform multiple measurements. In each measurement, a thread writes
-  // kCopyPerThreadPerMsr bytes in copy_sz chunks.
-  static constexpr size_t kCopyPerThreadPerMsr = GB(1);
-
-  void *dram_src_buf = memalign(4096, copy_sz);
-  memset(dram_src_buf, 0, copy_sz);
-
-  // Each thread write to non-overlapping addresses
-  const size_t excl_bytes_per_thread = kPmemFileSize / FLAGS_num_threads;
-  rt_assert(excl_bytes_per_thread >= kCopyPerThreadPerMsr);
-
-  const size_t base_addr = thread_id * excl_bytes_per_thread;
-  size_t offset = base_addr;
-
-  for (size_t msr = 0; msr < 3; msr++) {
-    struct timespec start;
-    clock_gettime(CLOCK_REALTIME, &start);
-
-    for (size_t i = 0; i < kCopyPerThreadPerMsr / copy_sz; i++) {
-      pmem_memmove_persist(&pbuf[offset], dram_src_buf, copy_sz);
-      offset += copy_sz;
-      if (offset + copy_sz >= base_addr + excl_bytes_per_thread) {
-        offset = base_addr;
-      }
-    }
-
-    size_t total_copied = copy_sz * (kCopyPerThreadPerMsr / copy_sz);
-    double tot_sec = sec_since(start);
-    printf("Thread %zu: %.2f GB/s\n", thread_id,
-           total_copied / (tot_sec * 1000000000));
-  }
-
-  free(dram_src_buf);
-}
-
 // Write to the whole file to "map it in", whatever that means
 void map_in_file_whole(uint8_t *pbuf, size_t mapped_len) {
   printf("Writing to the whole file for map-in...\n");
@@ -245,16 +177,33 @@ int main(int argc, char **argv) {
   //  nano_sleep(1000000000, 3.0);  // Assume TSC frequency = 3 GHz
   auto bench_func = bench_seq_write;
 
+  // Sequential write
   if (bench_func == bench_seq_write) {
-    for (size_t copy_sz = 64; copy_sz <= MB(1); copy_sz *= 2) {
-      printf("Sequential write bench. copy_sz %zu, %zu threads\n", copy_sz,
-             FLAGS_num_threads);
+    printf("Sequential write bench. %zu threads\n", FLAGS_num_threads);
+    std::ostringstream dat_header;
+    std::ostringstream dat_data;
+    dat_header << "Threads ";
+    dat_data << std::to_string(FLAGS_num_threads) << " ";
+
+    for (size_t copy_sz = 64; copy_sz <= MB(256); copy_sz *= 2) {
+      dat_header << std::to_string(copy_sz) << " ";
+      double avg_tput_GBps[FLAGS_num_threads];
+
       std::vector<std::thread> threads(FLAGS_num_threads);
       for (size_t i = 0; i < FLAGS_num_threads; i++) {
-        threads[i] = std::thread(bench_seq_write, pbuf, i, copy_sz);
+        threads[i] =
+            std::thread(bench_seq_write, pbuf, i, copy_sz, &avg_tput_GBps[i]);
       }
       for (auto &t : threads) t.join();
+
+      double total_tput = 0.0;
+      for (size_t i = 0; i < FLAGS_num_threads; i++)
+        total_tput += avg_tput_GBps[i];
+      dat_data << std::to_string(total_tput) << " ";
     }
+
+    printf("%s\n", dat_header.str().c_str());
+    printf("%s\n", dat_data.str().c_str());
   }
 
   pmem_unmap(pbuf, mapped_len);
