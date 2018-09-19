@@ -182,7 +182,7 @@ int main(int argc, char **argv) {
     dat_header << "Threads ";
     dat_data << std::to_string(FLAGS_num_threads) << " ";
 
-    for (size_t copy_sz = 64; copy_sz <= MB(256); copy_sz *= 2) {
+    for (size_t copy_sz = 64; copy_sz <= GB(1); copy_sz *= 2) {
       dat_header << std::to_string(copy_sz) << " ";
       double avg_tput_GBps[FLAGS_num_threads];
 
