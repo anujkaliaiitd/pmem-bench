@@ -2,6 +2,7 @@
 #include "../common.h"
 
 // Benchmark impl
+#include "seq_write_latency.h"
 #include "seq_write_tput.h"
 
 void bench_seq_read_tput(uint8_t *pbuf, size_t thread_id) {
@@ -171,12 +172,12 @@ int main(int argc, char **argv) {
   // map_in_file_by_page(pbuf);
   // map_in_file_whole(pbuf);
 
-  //  nano_sleep(1000000000, 3.0);  // Assume TSC frequency = 3 GHz
-  auto bench_func = bench_seq_write_tput;
+  // auto bench_func = bench_seq_write_tput;
+  auto bench_func = reinterpret_cast<void *>(&bench_seq_write_latency);
 
-  // Sequential write
-  if (bench_func == bench_seq_write_tput) {
-    printf("Sequential write bench. %zu threads\n", FLAGS_num_threads);
+  // Sequential write throughput
+  if (bench_func == reinterpret_cast<void *>(&bench_seq_write_tput)) {
+    printf("Sequential write throughput. %zu threads\n", FLAGS_num_threads);
     std::ostringstream dat_header;
     std::ostringstream dat_data;
     dat_header << "Threads ";
@@ -202,6 +203,12 @@ int main(int argc, char **argv) {
 
     printf("%s\n", dat_header.str().c_str());
     printf("%s\n", dat_data.str().c_str());
+  }
+
+  // Sequential write latency
+  if (bench_func == reinterpret_cast<void *>(&bench_seq_write_latency)) {
+    printf("Sequential write latency. One thread only!\n");
+    bench_seq_write_latency(pbuf);
   }
 
   pmem_unmap(pbuf, mapped_len);
