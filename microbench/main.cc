@@ -2,7 +2,7 @@
 #include "../common.h"
 
 // Benchmark impl
-#include "seq_write.h"
+#include "seq_write_tput.h"
 
 void bench_seq_read_tput(uint8_t *pbuf, size_t thread_id) {
   _unused(pbuf);
@@ -172,10 +172,10 @@ int main(int argc, char **argv) {
   // map_in_file_whole(pbuf);
 
   //  nano_sleep(1000000000, 3.0);  // Assume TSC frequency = 3 GHz
-  auto bench_func = bench_seq_write;
+  auto bench_func = bench_seq_write_tput;
 
   // Sequential write
-  if (bench_func == bench_seq_write) {
+  if (bench_func == bench_seq_write_tput) {
     printf("Sequential write bench. %zu threads\n", FLAGS_num_threads);
     std::ostringstream dat_header;
     std::ostringstream dat_data;
@@ -188,8 +188,8 @@ int main(int argc, char **argv) {
 
       std::vector<std::thread> threads(FLAGS_num_threads);
       for (size_t i = 0; i < FLAGS_num_threads; i++) {
-        threads[i] =
-            std::thread(bench_seq_write, pbuf, i, copy_sz, &avg_tput_GBps[i]);
+        threads[i] = std::thread(bench_seq_write_tput, pbuf, i, copy_sz,
+                                 &avg_tput_GBps[i]);
         bind_to_core(threads[i], kNumaNode, i);
       }
       for (auto &t : threads) t.join();

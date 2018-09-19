@@ -2,8 +2,8 @@
 #include "main.h"
 
 /// Sequential writes
-void bench_seq_write(uint8_t *pbuf, size_t thread_id, size_t copy_sz,
-                     double *avg_tput_GBps) {
+void bench_seq_write_tput(uint8_t *pbuf, size_t thread_id, size_t copy_sz,
+                          double *avg_tput_GBps) {
   // We perform multiple measurements. In each measurement, a thread writes
   // kCopyPerThreadPerMsr bytes in copy_sz chunks.
   static constexpr size_t kNumMsr = 1;
