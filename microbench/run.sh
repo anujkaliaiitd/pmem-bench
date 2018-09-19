@@ -1,7 +1,7 @@
 exe="./main"
 chmod +x $exe
 
-num_threads=2
+num_threads=1
 
 if [ "$#" -gt 1 ]; then
   blue "Illegal number of arguments."

@@ -16,7 +16,7 @@ void bench_seq_write(uint8_t *pbuf, size_t thread_id, size_t copy_sz,
   // Each thread write to non-overlapping addresses
   const size_t excl_bytes_per_thread = kPmemFileSize / FLAGS_num_threads;
   rt_assert(excl_bytes_per_thread >= kCopyPerThreadPerMsr);
-  const size_t base_offset = thread_id * excl_bytes_per_thread;
+  const size_t base_offset = roundup<256>(thread_id * excl_bytes_per_thread);
 
   // We begin copies from a random aligned offset in the file. This prevents
   // multiple calls from writing to the same file region. std::random_device
