@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <gflags/gflags.h>
 #include <libpmem.h>
+#include <malloc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,8 +12,10 @@
 
 DEFINE_uint64(num_threads, 0, "Number of threads");
 
+static constexpr const char *kPmemFile = "/dev/dax0.0";
 static constexpr size_t kPmemFileSizeGB = 256;  // The expected file size
 static constexpr size_t kPmemFileSize = kPmemFileSizeGB * GB(1);
+
 static constexpr bool kMeasureLatency = false;
 double freq_ghz = 0.0;
 static size_t align64(size_t x) { return x - x % 64; }
@@ -142,29 +145,37 @@ void bench_rand_write_lat(uint8_t *pbuf, size_t thread_id) {
 }
 
 /// Sequential writes
-void bench_seq_write(uint8_t *pbuf, size_t thread_id) {
-  static constexpr size_t kCopySize = MB(256);
-  void *dram_src_buf = malloc(kCopySize);
-  memset(dram_src_buf, 0, kCopySize);
+void bench_seq_write(uint8_t *pbuf, size_t thread_id, size_t copy_sz) {
+  // We perform multiple measurements. In each measurement, a thread writes
+  // kCopyPerThreadPerMsr bytes in copy_sz chunks.
+  static constexpr size_t kCopyPerThreadPerMsr = GB(1);
 
-  // Write to non-overlapping addresses
-  const size_t bytes_per_thread = kPmemFileSize / FLAGS_num_threads;
-  const size_t base_addr = thread_id * bytes_per_thread;
-  size_t cur_base = base_addr;
+  void *dram_src_buf = memalign(4096, copy_sz);
+  memset(dram_src_buf, 0, copy_sz);
 
-  while (true) {
+  // Each thread write to non-overlapping addresses
+  const size_t excl_bytes_per_thread = kPmemFileSize / FLAGS_num_threads;
+  rt_assert(excl_bytes_per_thread >= kCopyPerThreadPerMsr);
+
+  const size_t base_addr = thread_id * excl_bytes_per_thread;
+  size_t offset = base_addr;
+
+  for (size_t msr = 0; msr < 3; msr++) {
     struct timespec start;
     clock_gettime(CLOCK_REALTIME, &start);
-    pmem_memcpy_persist(&pbuf[cur_base], dram_src_buf, kCopySize);
 
-    cur_base += kCopySize;
-    if (cur_base + kCopySize >= base_addr + bytes_per_thread) {
-      cur_base = base_addr;
+    for (size_t i = 0; i < kCopyPerThreadPerMsr / copy_sz; i++) {
+      pmem_memmove_persist(&pbuf[offset], dram_src_buf, copy_sz);
+      offset += copy_sz;
+      if (offset + copy_sz >= base_addr + excl_bytes_per_thread) {
+        offset = base_addr;
+      }
     }
 
+    size_t total_copied = copy_sz * (kCopyPerThreadPerMsr / copy_sz);
     double tot_sec = sec_since(start);
-    printf("Thread %zu: Bandwidth of persistent writes (%.3f GB) = %.2f GB/s\n",
-           thread_id, kCopySize * 1.0 / GB(1), kCopySize / (tot_sec * GB(1)));
+    printf("Thread %zu: %.2f GB/s\n", thread_id,
+           total_copied / (tot_sec * 1000000000));
   }
 
   free(dram_src_buf);
@@ -217,14 +228,13 @@ int main(int argc, char **argv) {
   freq_ghz = measure_rdtsc_freq();
   printf("RDTSC frequency = %.2f GHz\n", freq_ghz);
 
-  pbuf = reinterpret_cast<uint8_t *>(
-      pmem_map_file("/mnt/pmem12/raft_log", 0 /* length */, 0 /* flags */, 0666,
-                    &mapped_len, &is_pmem));
+  pbuf = reinterpret_cast<uint8_t *>(pmem_map_file(
+      kPmemFile, 0 /* length */, 0 /* flags */, 0666, &mapped_len, &is_pmem));
 
   rt_assert(pbuf != nullptr,
             "pmem_map_file() failed. " + std::string(strerror(errno)));
-  rt_assert(mapped_len == kPmemFileSizeGB * GB(1),
-            "Incorrect file size " + std::to_string(mapped_len));
+  rt_assert(mapped_len >= kPmemFileSize,
+            "pmem file too small " + std::to_string(mapped_len));
   rt_assert(reinterpret_cast<size_t>(pbuf) % 4096 == 0,
             "Mapped buffer isn't page-aligned");
   rt_assert(is_pmem == 1, "File is not pmem");
@@ -233,17 +243,19 @@ int main(int argc, char **argv) {
   // map_in_file_whole(pbuf, mapped_len);
 
   //  nano_sleep(1000000000, 3.0);  // Assume TSC frequency = 3 GHz
+  auto bench_func = bench_seq_write;
 
-  std::vector<std::thread> threads(FLAGS_num_threads);
-  for (size_t i = 0; i < FLAGS_num_threads; i++) {
-    // threads[i] = std::thread(bench_rand_read_lat, pbuf, i);
-    // threads[i] = std::thread(bench_rand_read_tput, pbuf, i);
-    // threads[i] = std::thread(bench_rand_write_lat, pbuf, i);
-    // threads[i] = std::thread(bench_rand_write_tput, pbuf, i);
-    threads[i] = std::thread(bench_seq_write, pbuf, i);
+  if (bench_func == bench_seq_write) {
+    for (size_t copy_sz = 64; copy_sz <= MB(1); copy_sz *= 2) {
+      printf("Sequential write bench. copy_sz %zu, %zu threads\n", copy_sz,
+             FLAGS_num_threads);
+      std::vector<std::thread> threads(FLAGS_num_threads);
+      for (size_t i = 0; i < FLAGS_num_threads; i++) {
+        threads[i] = std::thread(bench_seq_write, pbuf, i, copy_sz);
+      }
+      for (auto &t : threads) t.join();
+    }
   }
-
-  for (auto &thread : threads) thread.join();
 
   pmem_unmap(pbuf, mapped_len);
   exit(0);
