@@ -114,36 +114,33 @@ void bench_rand_write_lat(uint8_t *pbuf, size_t thread_id) {
 }
 
 // Write to the whole file to "map it in", whatever that means
-void map_in_file_whole(uint8_t *pbuf, size_t mapped_len) {
+void map_in_file_whole(uint8_t *pbuf) {
   printf("Writing to the whole file for map-in...\n");
   const size_t chunk_sz = GB(16);
-  rt_assert(mapped_len % chunk_sz == 0, "Invalid chunk size for map-in");
+  rt_assert(kPmemFileSize % chunk_sz == 0, "Invalid chunk size for map-in");
 
-  for (size_t i = 0; i < mapped_len; i += chunk_sz) {
+  for (size_t i = 0; i < kPmemFileSize; i += chunk_sz) {
     struct timespec start;
     clock_gettime(CLOCK_REALTIME, &start);
     pmem_memset_persist(&pbuf[i], 3185, chunk_sz);  // nodrain performs similar
     printf("Fraction complete = %.2f. Took %.3f sec for %zu GB.\n",
-           (i + 1) * 1.0 / mapped_len, sec_since(start), chunk_sz / GB(1));
+           (i + 1) * 1.0 / kPmemFileSize, sec_since(start), chunk_sz / GB(1));
   }
 
   printf("Done writing.\n");
 }
 
 // Write to a byte in each page of the file, to map the pages in
-void map_in_file_by_page(uint8_t *pbuf, size_t mapped_len) {
+void map_in_file_by_page(uint8_t *pbuf) {
   printf("Mapping-in file pages.\n");
-  const size_t chunk_sz = GB(16);
-  rt_assert(mapped_len % chunk_sz == 0, "Invalid chunk size for map-in");
-
   struct timespec start;
   clock_gettime(CLOCK_REALTIME, &start);
 
-  for (size_t i = 0; i < mapped_len; i += KB(4)) {
+  for (size_t i = 0; i < kPmemFileSize; i += KB(4)) {
     pmem_memset_nodrain(&pbuf[i], 3185, 1);
     if (i % GB(32) == 0 && i > 0) {
-      printf("Fraction complete = %.2f. Took %.3f sec for %zu GB.\n",
-             (i + 1) * 1.0 / mapped_len, sec_since(start), chunk_sz / GB(1));
+      printf("Fraction complete = %.2f. Took %.3f sec for %u GB.\n",
+             (i + 1) * 1.0 / kPmemFileSize, sec_since(start), 32);
       clock_gettime(CLOCK_REALTIME, &start);
     }
   }
@@ -171,8 +168,8 @@ int main(int argc, char **argv) {
             "Mapped buffer isn't page-aligned");
   rt_assert(is_pmem == 1, "File is not pmem");
 
-  // map_in_file_by_page(pbuf, mapped_len);
-  // map_in_file_whole(pbuf, mapped_len);
+  // map_in_file_by_page(pbuf);
+  // map_in_file_whole(pbuf);
 
   //  nano_sleep(1000000000, 3.0);  // Assume TSC frequency = 3 GHz
   auto bench_func = bench_seq_write;
