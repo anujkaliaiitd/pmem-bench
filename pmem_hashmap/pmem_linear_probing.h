@@ -34,7 +34,8 @@ SOFTWARE.
 
 template <typename Key, typename Value, size_t num_slots>
 class HashMap {
-  enum class State : size_t { kEmpty, kFull, kDelete };
+  static_assert(is_power_of_two(num_slots), "");
+  enum class State : size_t { kEmpty = 0, kFull, kDelete };
 
   class Slot {
    public:
@@ -59,40 +60,44 @@ class HashMap {
     rt_assert(mapped_len >= num_slots * sizeof(Slot),
               "pmem file too small " + std::to_string(mapped_len));
     rt_assert(is_pmem == 1, "File is not pmem");
+
+    // This marks all slots as empty
+    pmem_memset_persist(slot_arr, 0, num_slots * sizeof(Slot));
   }
 
   ~HashMap() {
     if (slot_arr != nullptr) pmem_unmap(slot_arr, mapped_len);
   }
 
-  static size_t get_hash(Key &k) {
-    return CityHash64(reinterpret_cast<char *>(&k), sizeof(Key));
+  static size_t get_hash(const Key &k) {
+    return CityHash64(reinterpret_cast<const char *>(&k), sizeof(Key));
   }
 
   bool insert(const Key &key, const Key &value) {
     const size_t hash = get_hash(key);
 
     for (size_t offset = 0; offset < num_slots; offset++) {
-      size_t slot_idx = (hash + offset);
-      if (slot_idx >= num_slots) slot_idx -= num_slots;
+      auto &slot = slot_arr[(hash + offset) % num_slots];
 
-      if (slot_arr[slot_idx].state != State::kFull) {
-        Slot to_insert(Slot::kFull, key, value);
-        slot_arr[slot_idx] = to_insert;
+      if (slot.key == key) return true;
+
+      if (slot.state != State::kFull) {
+        Slot to_insert(State::kFull, key, value);
+        slot = to_insert;
+        return true;
       }
     }
+
+    return false;
   }
 
   bool get(const Key &key, const Value &value) {
     const size_t hash = get_hash(key);
 
     for (size_t offset = 0; offset < num_slots; offset++) {
-      size_t slot_idx = (hash + offset);
-      if (slot_idx >= num_slots) slot_idx -= num_slots;
+      auto &slot = slot_arr[(hash + offset) % num_slots];
 
-      auto &slot = slot_arr[slot_idx];
-      if (slot.state == State::kFull &&
-          memcmp(&slot.key, &key, sizeof(key)) == 0) {
+      if (slot.state == State::kFull && slot.key == key) {
         value = slot.value;
         return true;
       }
