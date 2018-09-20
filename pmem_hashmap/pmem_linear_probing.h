@@ -23,14 +23,24 @@ class HashMap {
   class RedoLogEntry {
    public:
     static constexpr size_t kInvalidOperationNumber = 0;
+
     size_t operation_number;  // Operation number of this entry. Zero is invalid
     Key key;
     Value value;
+    size_t valid;
+
+    // Align to 256 bytes
+    char padding[256 - (sizeof(size_t) + sizeof(Key) + sizeof(Value) +
+                        sizeof(size_t))];
 
     RedoLogEntry(size_t operation_number, Key key, Value value)
-        : operation_number(operation_number), key(key), value(value) {}
+        : operation_number(operation_number),
+          key(key),
+          value(value),
+          valid(0) {}
     RedoLogEntry() {}
   };
+  static_assert(sizeof(RedoLogEntry) == 256, "");
 
   static constexpr size_t kMaxBatchSize = 16;  // = number of redo log entries
 
