@@ -2,6 +2,7 @@
 #include "../common.h"
 
 // Benchmark impl
+#include "rand_write_latency.h"
 #include "seq_write_latency.h"
 #include "seq_write_tput.h"
 
@@ -172,11 +173,13 @@ int main(int argc, char **argv) {
   // map_in_file_by_page(pbuf);
   // map_in_file_whole(pbuf);
 
-  // auto bench_func = bench_seq_write_tput;
-  auto bench_func = reinterpret_cast<void *>(&bench_seq_write_latency);
+  // std::string bench_func = "bench_seq_write_tput";
+  // std::string bench_func = "bench_seq_write_latency";
+  std::string bench_func = "bench_rand_write_latency";
+  // auto bench_func = reinterpret_cast<void *>(bench_seq_write_tput);
 
   // Sequential write throughput
-  if (bench_func == reinterpret_cast<void *>(&bench_seq_write_tput)) {
+  if (bench_func == "bench_seq_write_tput") {
     printf("Sequential write throughput. %zu threads\n", FLAGS_num_threads);
     std::ostringstream dat_header;
     std::ostringstream dat_data;
@@ -206,9 +209,15 @@ int main(int argc, char **argv) {
   }
 
   // Sequential write latency
-  if (bench_func == reinterpret_cast<void *>(&bench_seq_write_latency)) {
+  if (bench_func == "bench_seq_write_latency") {
     printf("Sequential write latency. One thread only!\n");
     bench_seq_write_latency(pbuf);
+  }
+
+  // Random write latency
+  if (bench_func == "bench_rand_write_latency") {
+    printf("Random write latency. One thread only!\n");
+    bench_rand_write_latency(pbuf);
   }
 
   pmem_unmap(pbuf, mapped_len);
