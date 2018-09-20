@@ -21,8 +21,15 @@ class HashMap {
   };
 
   class RedoLogEntry {
+   public:
+    static constexpr size_t kInvalidOperationNumber = 0;
+    size_t operation_number;  // Operation number of this entry. Zero is invalid
     Key key;
     Value value;
+
+    RedoLogEntry(size_t operation_number, Key key, Value value)
+        : operation_number(operation_number), key(key), value(value) {}
+    RedoLogEntry() {}
   };
 
   static constexpr size_t kMaxBatchSize = 16;  // = number of redo log entries
@@ -41,13 +48,18 @@ class HashMap {
               "pmem file too small " + std::to_string(mapped_len));
     rt_assert(is_pmem == 1, "File is not pmem");
 
+    // Initialize redo log entries
     redo_log_entry_arr = reinterpret_cast<RedoLogEntry *>(pbuf);
+    for (size_t i = 0; i < kMaxBatchSize; i++) {
+      redo_log_entry_arr[i].operation_number =
+          RedoLogEntry::kInvalidOperationNumber;
+    }
+    pmem_flush(&redo_log_entry_arr[0], kMaxBatchSize * sizeof(RedoLogEntry));
 
+    // Initialize slots
     size_t slot_arr_offset = roundup<256>(kMaxBatchSize * sizeof(RedoLogEntry));
     slot_arr = reinterpret_cast<Slot *>(&pbuf[slot_arr_offset]);
-
-    // This marks all slots as empty
-    pmem_memset_persist(slot_arr, 0, kNumSlots * sizeof(Slot));
+    pmem_memset_persist(slot_arr, 0, kNumSlots * sizeof(Slot));  // kEmpty
   }
 
   ~HashMap() {
@@ -65,6 +77,11 @@ class HashMap {
 
   inline bool insert(const Key &key, const Key &value) {
     const size_t hash = get_hash(key);
+    RedoLogEntry redo_log_entry(cur_operation_number, key, value);
+    pmem_memcpy_persist(
+        &redo_log_entry_arr[cur_operation_number % kMaxBatchSize],
+        &redo_log_entry, sizeof(RedoLogEntry));
+    cur_operation_number++;
 
     for (size_t offset = 0; offset < kNumSlots; offset++) {
       auto &slot = slot_arr[(hash + offset) % kNumSlots];
@@ -73,7 +90,7 @@ class HashMap {
 
       if (slot.state != State::kFull) {
         Slot to_insert(State::kFull, key, value);
-        slot = to_insert;
+        pmem_memcpy_persist(&slot, &to_insert, sizeof(Slot));
         return true;
       }
     }
@@ -101,5 +118,6 @@ class HashMap {
  private:
   size_t mapped_len;
   RedoLogEntry *redo_log_entry_arr;
+  size_t cur_operation_number = RedoLogEntry::kInvalidOperationNumber;
   Slot *slot_arr;
 };
