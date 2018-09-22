@@ -17,7 +17,7 @@
 DEFINE_uint64(num_threads, 0, "Number of threads");
 
 static constexpr const char *kPmemFile = "/dev/dax0.0";
-static constexpr size_t kPmemFileSizeGB = 256;  // The expected file size
+static constexpr size_t kPmemFileSizeGB = 1024;  // The expected file size
 static constexpr size_t kPmemFileSize = kPmemFileSizeGB * GB(1);
 
 static constexpr bool kMeasureLatency = false;

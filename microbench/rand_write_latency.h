@@ -22,7 +22,7 @@ void bench_rand_write_latency(uint8_t *pbuf) {
       latency_vec.clear();
 
       for (size_t i = 0; i < kNumIters; i++) {
-        file_offset = roundup<256>(pcg() % kPmemFileSize);
+        file_offset = roundup<64>(pcg() % kPmemFileSize);
 
         size_t start_tsc = rdtsc();
         mfence();
