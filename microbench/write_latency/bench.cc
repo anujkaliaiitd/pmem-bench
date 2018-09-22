@@ -35,12 +35,11 @@ int main() {
 
     // Real work
     for (size_t i = 0; i < kNumIters; i++) {
-      size_t start_tsc = rdtsc();
-      mfence();
+      size_t start_tsc = timer::Start();
       pmem_memmove_persist(&pbuf[file_offset], data, kWriteSize);
-      mfence();
+      size_t cycles = timer::Stop() - start_tsc;
 
-      latency_vec.push_back(rdtsc() - start_tsc);
+      latency_vec.push_back(cycles);
 
       file_offset += kWriteSize;
       if (file_offset + kWriteSize >= mapped_len) file_offset = 0;

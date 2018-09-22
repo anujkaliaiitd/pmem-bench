@@ -8,6 +8,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include "timer.h"
 
 #define _unused(x) ((void)(x))  // Make production build happy
 
