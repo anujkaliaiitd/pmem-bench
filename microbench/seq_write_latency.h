@@ -45,7 +45,9 @@ void bench_seq_write_latency(uint8_t *pbuf) {
           std::accumulate(latency_vec.begin(), latency_vec.end(), 0.0) /
           (latency_vec.size() * freq_ghz);
       verify_tsc_str << "Average latency (ns) " << ns_avg_realtime
-                     << " (realtime) " << ns_avg_rdtsc << " (rdtsc)\n";
+                     << " (realtime) " << ns_avg_rdtsc << " (rdtsc) "
+                     << (ns_avg_realtime - ns_avg_rdtsc) << " (delta) "
+                     << "\n";
 
       std::sort(latency_vec.begin(), latency_vec.end());
       printf("%zu %.1f %.1f %.1f\n", size,
