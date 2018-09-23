@@ -173,10 +173,11 @@ int main(int argc, char **argv) {
   // map_in_file_by_page(pbuf);
   // map_in_file_whole(pbuf);
 
-  // std::string bench_func = "bench_seq_write_tput";
-  std::string bench_func = "bench_seq_write_latency";
-  // std::string bench_func = "bench_rand_write_latency";
-  // auto bench_func = reinterpret_cast<void *>(bench_seq_write_tput);
+  std::string bench_func;  // Last one wins
+  bench_func = "bench_seq_write_tput";
+  bench_func = "bench_rand_write_latency";
+  bench_func = "bench_seq_write_tput";
+  bench_func = "bench_seq_write_latency";
 
   // Sequential write throughput
   if (bench_func == "bench_seq_write_tput") {
