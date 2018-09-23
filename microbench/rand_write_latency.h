@@ -17,6 +17,7 @@ void bench_rand_write_latency(uint8_t *pbuf) {
   latency_vec.reserve(kWriteBytes / kMinWriteSz);
 
   uint8_t *data = reinterpret_cast<uint8_t *>(memalign(4096, kMaxWriteSz));
+  std::ostringstream verify_tsc_str;  // Compare tsc results with realtime clock
 
   for (size_t msr = 0; msr < 10; msr++) {
     printf("size 50_ns 99_ns 999_ns\n");
@@ -32,20 +33,18 @@ void bench_rand_write_latency(uint8_t *pbuf) {
       for (size_t i = 0; i < num_iters; i++) {
         file_offset = roundup<64>(pcg() % kPmemFileSize);
 
-        size_t start_tsc = rdtsc();
-        mfence();
+        size_t start_tsc = timer::Start();
         pmem_memmove_persist(&pbuf[file_offset], data, size);
-        mfence();
 
-        latency_vec.push_back(rdtsc() - start_tsc);
+        latency_vec.push_back(timer::Stop() - start_tsc);
       }
 
-      double ns_avg_realtime = ns_since(start_time) / num_iters;
-      double ns_avg_rdtsc =
+      size_t ns_avg_realtime = ns_since(start_time) / num_iters;
+      size_t ns_avg_rdtsc =
           std::accumulate(latency_vec.begin(), latency_vec.end(), 0.0) /
           (latency_vec.size() * freq_ghz);
-      printf("Average latency: %.1f ns (realtime), %.1f ns (rdtsc)\n",
-             ns_avg_realtime, ns_avg_rdtsc);
+      verify_tsc_str << "Average latency (ns) " << ns_avg_realtime
+                     << " (realtime) " << ns_avg_rdtsc << " (rdtsc)\n";
 
       std::sort(latency_vec.begin(), latency_vec.end());
       printf("%zu %.1f %.1f %.1f\n", size,
@@ -53,5 +52,7 @@ void bench_rand_write_latency(uint8_t *pbuf) {
              latency_vec.at(num_iters * .99) / freq_ghz,
              latency_vec.at(num_iters * .999) / freq_ghz);
     }
+
+    printf("Fences verification:\n%s\n", verify_tsc_str.str().c_str());
   }
 }

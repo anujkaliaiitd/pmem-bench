@@ -175,8 +175,8 @@ int main(int argc, char **argv) {
 
   std::string bench_func;  // Last one wins
   bench_func = "bench_seq_write_tput";
-  bench_func = "bench_rand_write_latency";
   bench_func = "bench_seq_write_tput";
+  bench_func = "bench_rand_write_latency";
   bench_func = "bench_seq_write_latency";
 
   // Sequential write throughput
