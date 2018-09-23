@@ -16,10 +16,10 @@ void bench_seq_write_latency(uint8_t *pbuf) {
   latency_vec.reserve(kWriteBytes / kMinWriteSz);
 
   uint8_t *data = reinterpret_cast<uint8_t *>(memalign(4096, kMaxWriteSz));
-  std::ostringstream verify_tsc_str;
 
   for (size_t msr = 0; msr < 10; msr++) {
     printf("size 50_ns 99_ns 999_ns\n");
+    std::ostringstream verify_tsc_str;  // Compare tsc results with realtime
 
     for (size_t size = kMinWriteSz; size <= kMaxWriteSz; size *= 2) {
       struct timespec start_time;
@@ -44,7 +44,7 @@ void bench_seq_write_latency(uint8_t *pbuf) {
       size_t ns_avg_rdtsc =
           std::accumulate(latency_vec.begin(), latency_vec.end(), 0.0) /
           (latency_vec.size() * freq_ghz);
-      verify_tsc_str << "Average latency (ns) " << ns_avg_realtime
+      verify_tsc_str << size << ": Average latency (ns) " << ns_avg_realtime
                      << " (realtime) " << ns_avg_rdtsc << " (rdtsc) "
                      << (ns_avg_realtime - ns_avg_rdtsc) << " (delta) "
                      << "\n";
