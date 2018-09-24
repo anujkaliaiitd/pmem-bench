@@ -9,7 +9,7 @@ namespace mica {
 
 static constexpr size_t kSlotsPerBucket = 8;
 static constexpr size_t kMaxBatchSize = 16;
-static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 2;
+static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 8;
 static constexpr bool kVerbose = 16;
 
 template <typename Key, typename Value>
@@ -183,20 +183,41 @@ class HashMap {
 
   // Batched operation that takes in both GETs and SETs. When this function
   // returns, all SETs are persistent in the log.
-  void batch_op_drain(bool* is_set, const Key* key, Value* out_value,
-                      bool* success, size_t n) {
+  //
+  // For GETs, value_arr slots contain results. For SETs, they contain the value
+  // to SET.
+  void batch_op_drain(bool* is_set, const Key* key_arr, Value* value_arr,
+                      bool* success_arr, size_t n) {
     size_t keyhash_arr[kMaxBatchSize];
 
+    bool all_gets = true;
     for (size_t i = 0; i < n; i++) {
-      keyhash_arr[i] = get_hash(key[i]);
+      keyhash_arr[i] = get_hash(key_arr[i]);
       prefetch(keyhash_arr[i]);
 
       if (is_set[i]) {
+        all_gets = false;
+        RedoLogEntry v_rle(cur_sequence_number, key_arr[i], value_arr[i]);
+        cur_sequence_number++;  // Just the in-memory copy
+
+        RedoLogEntry& p_rle =
+            redo_log->entries[cur_sequence_number % kNumRedoLogEntries];
+        pmem_memcpy_nodrain(&p_rle, &v_rle, sizeof(RedoLogEntry));
       }
     }
 
+    if (!all_gets) {
+      pmem_drain();  // Block until the redo log entries become persistent
+      pmem_memcpy_persist(&redo_log->committed_seq_num, &cur_sequence_number,
+                          sizeof(size_t));
+    }
+
     for (size_t i = 0; i < n; i++) {
-      success[i] = get(keyhash_arr[i], key[i], out_value[i]);
+      if (is_set[i]) {
+        success_arr[i] = get(keyhash_arr[i], key_arr[i], value_arr[i]);
+      } else {
+        success_arr[i] = set_nodrain(keyhash_arr[i], key_arr[i], value_arr[i]);
+      }
     }
   }
 
@@ -309,10 +330,10 @@ class HashMap {
     return num_total_buckets * kSlotsPerBucket;
   };
 
-  std::string name;  // Name of the table
-  const size_t num_regular_buckets;
-  const size_t num_extra_buckets;
-  const size_t num_total_buckets;  // Total of regular and extra buckets
+  std::string name;                  // Name of the table
+  const size_t num_regular_buckets;  // Power-of-two number of main buckets
+  const size_t num_extra_buckets;    // num_regular_buckets * overhead_fraction
+  const size_t num_total_buckets;    // Sum of regular and extra buckets
   const Key invalid_key;
   Bucket* buckets_ = nullptr;
 
