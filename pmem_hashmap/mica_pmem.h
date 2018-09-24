@@ -27,8 +27,7 @@ class HashMap {
 
   struct Bucket {
     size_t next_extra_bucket_idx;  // 1-base; 0 = no extra bucket
-    Key key_arr[kSlotsPerBucket];
-    Value val_arr[kSlotsPerBucket];
+    Slot slot_arr[kSlotsPerBucket];
   };
 
   class RedoLogEntry {
@@ -134,7 +133,7 @@ class HashMap {
     printf("Required time ~ %.2f seconds\n", GB_to_memset / 3.0);
 
     // We need to achieve the following:
-    //  * bucket.key_arr[i] = invalid_key;
+    //  * bucket.slot[i].key = invalid_key;
     //  * bucket.next_extra_bucket_idx = 0;
     // pmem_memset_persist() uses SIMD, so it's faster
     pmem_memset_persist(&buckets_[0], 0, num_total_buckets * sizeof(Bucket));
@@ -158,7 +157,7 @@ class HashMap {
 
     while (true) {
       for (size_t i = 0; i < kSlotsPerBucket; i++) {
-        if (current_bucket->key_arr[i] != key) continue;
+        if (current_bucket->slot_arr[i].key != key) continue;
 
         *located_bucket = current_bucket;
         return i;
@@ -206,7 +205,7 @@ class HashMap {
     // printf("get key %zu, bucket %p, index %zu\n",
     //      key, located_bucket, item_index);
 
-    out_value = located_bucket->val_arr[item_index];
+    out_value = located_bucket->slot_arr[item_index].value;
     return true;
   }
 
@@ -216,7 +215,9 @@ class HashMap {
     assert(extra_bucket_index >= 1);
     extra_bucket_free_list.pop_back();
 
-    bucket->next_extra_bucket_idx = extra_bucket_index;
+    // This is an eight-byte operation, so no need in redo log
+    pmem_memcpy_persist(&bucket->next_extra_bucket_idx, &extra_bucket_index,
+                        sizeof(extra_bucket_index));
     return true;
   }
 
@@ -230,7 +231,7 @@ class HashMap {
     Bucket* current_bucket = bucket;
     while (true) {
       for (size_t i = 0; i < kSlotsPerBucket; i++) {
-        if (current_bucket->key_arr[i] == invalid_key) {
+        if (current_bucket->slot_arr[i].key == invalid_key) {
           *located_bucket = current_bucket;
           return i;
         }
@@ -248,12 +249,14 @@ class HashMap {
     }
   }
 
-  bool set(const Key& key, const Value& value) {
+  // Set a key-value item without a final sfence
+  bool set_nodrain(const Key& key, const Value& value) {
     assert(key != invalid_key);
-    return set(get_hash(key), key, value);
+    return set_nodrain(get_hash(key), key, value);
   }
 
-  bool set(uint64_t key_hash, const Key& key, const Value& value) {
+  // Set a key-value item without a final sfence
+  bool set_nodrain(uint64_t key_hash, const Key& key, const Value& value) {
     assert(key != invalid_key);
 
     // printf("set key %zu, value %zu\n");
@@ -275,8 +278,8 @@ class HashMap {
 
     // printf("  set key %zu, value %zu success. bucket %p, index %zu\n",
     //      key, value, located_bucket, item_index);
-    located_bucket->key_arr[item_index] = key;
-    located_bucket->val_arr[item_index] = value;
+    Slot s(key, value);
+    pmem_memcpy_nodrain(&located_bucket->slot_arr[item_index], &s, sizeof(s));
 
     return true;
   }

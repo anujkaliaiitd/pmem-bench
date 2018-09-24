@@ -7,16 +7,16 @@ TEST(Basic, Simple) {
   size_t num_keys = 32;
   mica::HashMap<size_t, size_t> hashmap("/dev/dax0.0", num_keys, 1.0);
 
-  bool success = hashmap.set(1, 1);
+  bool success = hashmap.set_nodrain(1, 1);
   assert(success);
 
-  success = hashmap.set(1, 1);
+  success = hashmap.set_nodrain(1, 1);
   assert(success);
 
-  success = hashmap.set(2, 2);
+  success = hashmap.set_nodrain(2, 2);
   assert(success);
 
-  success = hashmap.set(3, 3);
+  success = hashmap.set_nodrain(3, 3);
   assert(success);
 
   size_t val = 0;
@@ -41,7 +41,7 @@ TEST(Basic, Overload) {
   size_t num_success = 0;
 
   for (size_t i = 1; i <= num_keys; i++) {
-    bool success = hashmap.set(i, i);
+    bool success = hashmap.set_nodrain(i, i);
     insert_success_map[i] = success;
 
     if (success) num_success++;
@@ -65,7 +65,7 @@ TEST(Basic, Large) {
   size_t num_success = 0;
 
   for (size_t i = 1; i <= num_keys; i++) {
-    bool success = hashmap.set(i, i);
+    bool success = hashmap.set_nodrain(i, i);
     insert_success_map[i] = success;
 
     if (success) num_success++;

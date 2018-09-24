@@ -12,7 +12,7 @@ int main() {
   clock_gettime(CLOCK_REALTIME, &start);
   size_t num_success = 0;
   for (size_t i = 1; i <= num_keys; i++) {
-    num_success += (hashmap.set(i, i) == true);
+    num_success += (hashmap.set_nodrain(i, i) == true);
   }
   double seconds = sec_since(start);
 
