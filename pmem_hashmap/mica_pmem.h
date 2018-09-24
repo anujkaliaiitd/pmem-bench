@@ -12,6 +12,8 @@ static constexpr size_t kMaxBatchSize = 16;
 static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 8;
 static constexpr bool kVerbose = 16;
 
+static constexpr bool kEnableRedoLogging = true;
+
 template <typename Key, typename Value>
 class HashMap {
  public:
@@ -39,19 +41,17 @@ class HashMap {
     Key key;
     Value value;
 
-    // Align to 256 bytes
-    char padding[256 - (sizeof(size_t) + sizeof(Key) + sizeof(Value))];
+    char padding[64 - (sizeof(seq_num) + sizeof(key) + sizeof(value))];
 
     RedoLogEntry(size_t seq_num, Key key, Value value)
         : seq_num(seq_num), key(key), value(value) {}
     RedoLogEntry() {}
   };
-  static_assert(sizeof(RedoLogEntry) == 256, "");
 
   class RedoLog {
    public:
-    size_t committed_seq_num;
     RedoLogEntry entries[kNumRedoLogEntries];
+    size_t committed_seq_num;
   };
 
   // Allocate a hash table with space for \p num_keys keys, and chain overflow
@@ -196,7 +196,7 @@ class HashMap {
       keyhash_arr[i] = get_hash(key_arr[i]);
       prefetch(keyhash_arr[i]);
 
-      if (is_set[i]) {
+      if (kEnableRedoLogging && is_set[i]) {
         all_gets = false;
         RedoLogEntry v_rle(cur_sequence_number, key_arr[i], value_arr[i]);
 
@@ -211,7 +211,7 @@ class HashMap {
       }
     }
 
-    if (!all_gets) {
+    if (kEnableRedoLogging && !all_gets) {
       pmem_drain();  // Block until the redo log entries become persistent
       pmem_memcpy_persist(&redo_log->committed_seq_num, &cur_sequence_number,
                           sizeof(size_t));
@@ -294,7 +294,8 @@ class HashMap {
     return set_nodrain(get_hash(key), key, value);
   }
 
-  // Set a key-value item without a final sfence
+  // Set a key-value item without a final sfence. If redo logging is disabled, a
+  // final sfence is used.
   bool set_nodrain(uint64_t key_hash, const Key& key, const Value& value) {
     assert(key != invalid_key);
 
@@ -318,7 +319,12 @@ class HashMap {
     // printf("  set key %zu, value %zu success. bucket %p, index %zu\n",
     //      key, value, located_bucket, item_index);
     Slot s(key, value);
-    pmem_memcpy_nodrain(&located_bucket->slot_arr[item_index], &s, sizeof(s));
+
+    if (kEnableRedoLogging) {
+      pmem_memcpy_nodrain(&located_bucket->slot_arr[item_index], &s, sizeof(s));
+    } else {
+      pmem_memcpy_persist(&located_bucket->slot_arr[item_index], &s, sizeof(s));
+    }
 
     return true;
   }
