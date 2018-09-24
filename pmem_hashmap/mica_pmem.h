@@ -140,7 +140,7 @@ class HashMap {
     pmem_memset_persist(&buckets_[0], 0, num_total_buckets * sizeof(Bucket));
   }
 
-  void prefetch_table(uint64_t key_hash) const {
+  void prefetch(uint64_t key_hash) const {
     size_t bucket_index = key_hash & (num_regular_buckets - 1);
     const Bucket* bucket = &buckets_[bucket_index];
 
@@ -169,6 +169,23 @@ class HashMap {
     }
 
     return kSlotsPerBucket;
+  }
+
+  // Batched GET
+  void get(const Key* key, Value* out_value, bool* success, size_t n) const {
+    assert(key != invalid_key);
+    assert(n <= kMaxBatchSize);
+
+    size_t keyhash_arr[kMaxBatchSize];
+
+    for (size_t i = 0; i < n; i++) {
+      keyhash_arr[i] = get_hash(key[i]);
+      prefetch(keyhash_arr[i]);
+    }
+
+    for (size_t i = 0; i < n; i++) {
+      success[i] = get(keyhash_arr[i], key[i], out_value[i]);
+    }
   }
 
   bool get(const Key& key, Value& out_value) const {
