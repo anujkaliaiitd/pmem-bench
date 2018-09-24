@@ -9,7 +9,6 @@ namespace mica {
 
 static constexpr size_t kSlotsPerBucket = 8;
 static constexpr size_t kNumRegularBuckets = 8;
-static constexpr double kExtraBucketsFraction = .2;
 static constexpr size_t kMaxBatchSize = 16;  // = number of redo log entries
 
 template <typename Key, typename Value>
@@ -55,8 +54,8 @@ class HashMap {
   };
   static_assert(sizeof(RedoLogEntry) == 256, "");
 
-  HashMap(std::string pmem_file)
-      : num_extra_buckets(kNumRegularBuckets * kExtraBucketsFraction),
+  HashMap(std::string pmem_file, double extra_buckets_fraction)
+      : num_extra_buckets(kNumRegularBuckets * extra_buckets_fraction),
         num_total_buckets(kNumRegularBuckets + num_extra_buckets),
         invalid_key(get_invalid_key()) {
     int is_pmem;
@@ -170,7 +169,10 @@ class HashMap {
     size_t item_index = find_item_index(bucket, key, &located_bucket);
     if (item_index == kSlotsPerBucket) return false;
 
-    memcpy(&out_value, &located_bucket->val_arr[item_index], sizeof(Value));
+    // printf("get key %zu, bucket %p, index %zu\n",
+    //       key, located_bucket, item_index);
+
+    out_value = located_bucket->val_arr[item_index];
     return true;
   }
 
@@ -190,6 +192,8 @@ class HashMap {
       if (item_index == kSlotsPerBucket) return false;
     }
 
+    // printf("set key %zu, value %zu, bucket %p, index %zu\n",
+    //       key, value, located_bucket, item_index);
     located_bucket->key_arr[item_index] = key;
     located_bucket->val_arr[item_index] = value;
 
