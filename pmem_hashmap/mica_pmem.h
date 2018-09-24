@@ -92,7 +92,7 @@ class HashMap {
     pmem_memset_persist(redo_log, 0, sizeof(RedoLog));
 
     // Initialize buckets
-    size_t bucket_offset = roundup<256>(kMaxBatchSize * sizeof(RedoLogEntry));
+    size_t bucket_offset = roundup<256>(sizeof(RedoLog));
     buckets_ = reinterpret_cast<Bucket*>(&pbuf[bucket_offset]);
 
     // extra_buckets_[0] is the actually the last regular bucket. extra_buckets_
@@ -219,9 +219,9 @@ class HashMap {
 
     for (size_t i = 0; i < n; i++) {
       if (is_set[i]) {
-        success_arr[i] = get(keyhash_arr[i], key_arr[i], value_arr[i]);
-      } else {
         success_arr[i] = set_nodrain(keyhash_arr[i], key_arr[i], value_arr[i]);
+      } else {
+        success_arr[i] = get(keyhash_arr[i], key_arr[i], value_arr[i]);
       }
     }
   }

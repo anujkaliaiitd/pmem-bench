@@ -5,6 +5,7 @@ static constexpr size_t kDefaultFileOffset = 0;
 mica::HashMap<size_t, size_t> *hashmap;
 
 static constexpr size_t kNumProbeKeys = MB(8);
+static constexpr size_t kNumTotalKeys = MB(16);
 
 void batch_gets(size_t batch_size) {
   printf("GET experiment, batch size %zu\n", batch_size);
@@ -71,7 +72,7 @@ void batch_sets(size_t batch_size) {
 
 int main() {
   hashmap = new mica::HashMap<size_t, size_t>("/dev/dax0.0", kDefaultFileOffset,
-                                              GB(1), 0.2);
+                                              kNumTotalKeys, 0.2);
 
   batch_sets(1);
   batch_sets(10);
