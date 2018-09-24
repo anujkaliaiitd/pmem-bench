@@ -9,6 +9,7 @@ namespace mica {
 
 static constexpr size_t kSlotsPerBucket = 8;
 static constexpr size_t kMaxBatchSize = 16;  // = number of redo log entries
+static constexpr bool kVerbose = 16;         // = number of redo log entries
 
 template <typename Key, typename Value>
 class HashMap {
@@ -128,11 +129,11 @@ class HashMap {
   // Initialize the contents of both regular and extra buckets
   void reset() {
     printf("Resetting hash table. This might take a while.\n");
-    double print_fraction = 0.01;
+    double print_fraction = 0.1;
     for (size_t bkt_i = 0; bkt_i < num_total_buckets; bkt_i++) {
-      if (bkt_i >= num_extra_buckets * print_fraction) {
+      if (bkt_i >= num_total_buckets * print_fraction) {
         printf("%.2f fraction done\n", print_fraction);
-        print_fraction += 0.01;
+        print_fraction += 0.1;
       }
 
       Bucket& bucket = buckets_[bkt_i];
@@ -178,7 +179,7 @@ class HashMap {
 
   bool get(const Key& key, Value& out_value) const {
     assert(key != invalid_key);
-    get(get_hash(key), key, out_value);
+    return get(get_hash(key), key, out_value);
   }
 
   bool get(uint64_t key_hash, const Key& key, Value& out_value) const {
@@ -238,11 +239,13 @@ class HashMap {
 
   bool set(const Key& key, const Value& value) {
     assert(key != invalid_key);
-    set(get_hash(key), key, value);
+    return set(get_hash(key), key, value);
   }
 
   bool set(uint64_t key_hash, const Key& key, const Value& value) {
     assert(key != invalid_key);
+
+    // printf("set key %zu, value %zu\n");
 
     // XXX Persist
     size_t bucket_index = key_hash & (num_regular_buckets - 1);
@@ -251,12 +254,16 @@ class HashMap {
     size_t item_index = find_item_index(bucket, key, &located_bucket);
 
     if (item_index == kSlotsPerBucket) {
+      // printf("  not found in bucket %p\n", bucket);
       item_index = get_empty(bucket, &located_bucket);
-      if (item_index == kSlotsPerBucket) return false;
+      if (item_index == kSlotsPerBucket) {
+        // printf("  no empty bucket %p\n", bucket);
+        return false;
+      }
     }
 
-    // printf("set key %zu, value %zu, bucket %p, index %zu\n",
-    //       key, value, located_bucket, item_index);
+    // printf("  set key %zu, value %zu success. bucket %p, index %zu\n",
+    //      key, value, located_bucket, item_index);
     located_bucket->key_arr[item_index] = key;
     located_bucket->val_arr[item_index] = value;
 
