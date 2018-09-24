@@ -4,6 +4,7 @@
 // Benchmark impl
 #include "rand_read_latency.h"
 #include "rand_write_latency.h"
+#include "seq_read_latency.h"
 #include "seq_write_latency.h"
 #include "seq_write_tput.h"
 
@@ -151,7 +152,7 @@ int main(int argc, char **argv) {
   bench_func = "bench_seq_write_tput";
   bench_func = "bench_seq_write_latency";
   bench_func = "bench_rand_write_latency";
-  bench_func = "bench_rand_read_latency";
+  bench_func = "bench_seq_read_latency";
 
   // Sequential write throughput
   if (bench_func == "bench_seq_write_tput") {
@@ -199,6 +200,12 @@ int main(int argc, char **argv) {
   if (bench_func == "bench_rand_read_latency") {
     printf("Random read latency. One thread only!\n");
     bench_rand_read_latency(pbuf);
+  }
+
+  // Sequential read latency
+  if (bench_func == "bench_seq_read_latency") {
+    printf("Sequential read latency. One thread only!\n");
+    bench_seq_read_latency(pbuf);
   }
 
   pmem_unmap(pbuf, mapped_len);
