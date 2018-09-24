@@ -19,7 +19,7 @@ void bench_rand_write_latency(uint8_t *pbuf) {
   uint8_t *data = reinterpret_cast<uint8_t *>(memalign(4096, kMaxWriteSz));
 
   for (size_t msr = 0; msr < 10; msr++) {
-    printf("size 50_ns 99_ns 999_ns\n");
+    printf("size avg_ns 50_ns 999_ns\n");
     std::ostringstream verify_tsc_str;  // Compare tsc results with realtime
 
     for (size_t size = kMinWriteSz; size <= kMaxWriteSz; size *= 2) {
@@ -49,9 +49,8 @@ void bench_rand_write_latency(uint8_t *pbuf) {
                      << "\n";
 
       std::sort(latency_vec.begin(), latency_vec.end());
-      printf("%zu %.1f %.1f %.1f\n", size,
-             latency_vec.at(num_iters * .5) / freq_ghz,
-             latency_vec.at(num_iters * .99) / freq_ghz,
+      printf("%zu %zu %.1f %.1f\n", size, ns_avg_realtime,
+             latency_vec.at(num_iters * .50) / freq_ghz,
              latency_vec.at(num_iters * .999) / freq_ghz);
     }
 

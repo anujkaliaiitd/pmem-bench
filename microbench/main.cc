@@ -2,37 +2,10 @@
 #include "../common.h"
 
 // Benchmark impl
+#include "rand_read_latency.h"
 #include "rand_write_latency.h"
 #include "seq_write_latency.h"
 #include "seq_write_tput.h"
-
-void bench_seq_read_tput(uint8_t *pbuf, size_t thread_id) {
-  _unused(pbuf);
-  _unused(thread_id);
-}
-
-/// Random read latency
-void bench_rand_read_lat(uint8_t *pbuf, size_t thread_id) {
-  static constexpr size_t kNumIters = MB(1);
-
-  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
-  struct timespec start;
-  size_t sum = 0;
-
-  while (true) {
-    clock_gettime(CLOCK_REALTIME, &start);
-
-    for (size_t i = 0; i < kNumIters; i++) {
-      // Choose a random dependent byte
-      size_t rand_addr = (pcg() + sum % 8) % kPmemFileSize;
-      sum += pbuf[rand_addr];
-    }
-
-    double tot_ns = ns_since(start);
-    printf("Thread %zu: Random read latency = %.2f ns. Sum = %zu\n", thread_id,
-           tot_ns / kNumIters, sum);
-  }
-}
 
 /// Random read throughput
 void bench_rand_read_tput(uint8_t *pbuf, size_t thread_id) {
@@ -176,8 +149,9 @@ int main(int argc, char **argv) {
   std::string bench_func;  // Last one wins
   bench_func = "bench_seq_write_tput";
   bench_func = "bench_seq_write_tput";
-  bench_func = "bench_rand_write_latency";
   bench_func = "bench_seq_write_latency";
+  bench_func = "bench_rand_write_latency";
+  bench_func = "bench_rand_read_latency";
 
   // Sequential write throughput
   if (bench_func == "bench_seq_write_tput") {
@@ -219,6 +193,12 @@ int main(int argc, char **argv) {
   if (bench_func == "bench_rand_write_latency") {
     printf("Random write latency. One thread only!\n");
     bench_rand_write_latency(pbuf);
+  }
+
+  // Random read latency
+  if (bench_func == "bench_rand_read_latency") {
+    printf("Random read latency. One thread only!\n");
+    bench_rand_read_latency(pbuf);
   }
 
   pmem_unmap(pbuf, mapped_len);

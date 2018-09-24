@@ -1,43 +1,48 @@
+#include <city.h>
 #include "../common.h"
 #include "main.h"
 
-void bench_seq_write_latency(uint8_t *pbuf) {
+void bench_rand_read_latency(uint8_t *pbuf) {
   double freq_ghz = measure_rdtsc_freq();
 
-  static constexpr size_t kWriteBytes = MB(64);
+  static constexpr size_t kReadBytes = MB(128);
   static constexpr size_t kMinIters = 50000;
-  static constexpr size_t kMinWriteSz = 64;
-  static constexpr size_t kMaxWriteSz = KB(64);
+  static constexpr size_t kMinReadSz = 64;
+  static constexpr size_t kMaxReadSz = KB(64);
 
   size_t file_offset = 0;
+  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
 
-  static_assert(kWriteBytes / kMinWriteSz >= kMinIters, "");
+  static_assert(kReadBytes / kMinReadSz >= kMinIters, "");
   std::vector<size_t> latency_vec;
-  latency_vec.reserve(kWriteBytes / kMinWriteSz);
+  latency_vec.reserve(kReadBytes / kMinReadSz);
 
-  uint8_t *data = reinterpret_cast<uint8_t *>(memalign(4096, kMaxWriteSz));
+  size_t sum = 0;
+  uint8_t *data = reinterpret_cast<uint8_t *>(memalign(4096, kMaxReadSz));
 
   for (size_t msr = 0; msr < 10; msr++) {
     printf("size avg_ns 50_ns 999_ns\n");
     std::ostringstream verify_tsc_str;  // Compare tsc results with realtime
 
-    for (size_t size = kMinWriteSz; size <= kMaxWriteSz; size *= 2) {
+    for (size_t size = kMinReadSz; size <= kMaxReadSz; size *= 2) {
       struct timespec start_time;
       clock_gettime(CLOCK_REALTIME, &start_time);
 
       latency_vec.clear();
-      file_offset = roundup<256>(file_offset);
       const size_t num_iters =
-          kWriteBytes / size <= kMinIters ? kMinIters : kWriteBytes / size;
+          kReadBytes / size <= kMinIters ? kMinIters : kReadBytes / size;
 
       for (size_t i = 0; i < num_iters; i++) {
+        size_t rand =
+            CityHash64(reinterpret_cast<char *>(&sum), sizeof(sum)) + pcg();
+
+        file_offset = roundup<64>(rand % kPmemFileSize);
+
         size_t start_tsc = timer::Start();
-        pmem_memmove_persist(&pbuf[file_offset], data, size);
+        memcpy(data, &pbuf[file_offset], size);
+        for (size_t j = 0; j < size; j += 64) sum += data[j];
 
         latency_vec.push_back(timer::Stop() - start_tsc);
-
-        file_offset += size;
-        if (file_offset + size >= kPmemFileSize) file_offset = 0;
       }
 
       size_t ns_avg_realtime = ns_since(start_time) / num_iters;
