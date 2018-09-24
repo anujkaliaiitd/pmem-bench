@@ -8,13 +8,11 @@
 namespace mica {
 
 static constexpr size_t kSlotsPerBucket = 8;
-static constexpr size_t kNumRegularBuckets = 8;
 static constexpr size_t kMaxBatchSize = 16;  // = number of redo log entries
 
 template <typename Key, typename Value>
 class HashMap {
  public:
-  static_assert(is_power_of_two(kNumRegularBuckets), "");
   enum class State : size_t { kEmpty = 0, kFull, kDelete };  // Slot state
 
   class Slot {
@@ -54,10 +52,14 @@ class HashMap {
   };
   static_assert(sizeof(RedoLogEntry) == 256, "");
 
-  HashMap(std::string pmem_file, double extra_buckets_fraction)
-      : num_extra_buckets(kNumRegularBuckets * extra_buckets_fraction),
-        num_total_buckets(kNumRegularBuckets + num_extra_buckets),
+  // Allocate a hash table with space for \p num_keys keys, and chain overflow
+  // room for \p overhead_fraction of the keys
+  HashMap(std::string pmem_file, size_t num_keys, double overhead_fraction)
+      : num_regular_buckets(rte_align64pow2(num_keys / kSlotsPerBucket)),
+        num_extra_buckets(num_regular_buckets * overhead_fraction),
+        num_total_buckets(num_regular_buckets + num_extra_buckets),
         invalid_key(get_invalid_key()) {
+    rt_assert(num_keys >= kSlotsPerBucket);  // At least one bucket
     int is_pmem;
     uint8_t* pbuf = reinterpret_cast<uint8_t*>(
         pmem_map_file(pmem_file.c_str(), 0 /* length */, 0 /* flags */, 0666,
@@ -65,9 +67,16 @@ class HashMap {
 
     rt_assert(pbuf != nullptr,
               "pmem_map_file() failed. " + std::string(strerror(errno)));
-    rt_assert(mapped_len >= kMaxBatchSize * sizeof(RedoLogEntry) +
-                                num_total_buckets * sizeof(Bucket),
-              "pmem file too small " + std::to_string(mapped_len));
+
+    const size_t reqd_space = kMaxBatchSize * sizeof(RedoLogEntry) +
+                              num_total_buckets * sizeof(Bucket);
+    if (mapped_len < reqd_space) {
+      fprintf(stderr,
+              "pmem file too small. %.2f GB required for hash table "
+              "(%zu buckets, bucket size = %zu), but only %.2f GB available\n",
+              reqd_space * 1.0 / GB(1), num_total_buckets, sizeof(Bucket),
+              mapped_len * 1.0 / GB(1));
+    }
     rt_assert(is_pmem == 1, "File is not pmem");
 
     // Initialize redo log entries
@@ -87,9 +96,12 @@ class HashMap {
     // as an extra bucket.
     extra_buckets_ =
         reinterpret_cast<Bucket*>(reinterpret_cast<uint8_t*>(buckets_) +
-                                  ((kNumRegularBuckets - 1) * sizeof(Bucket)));
+                                  ((num_regular_buckets - 1) * sizeof(Bucket)));
 
     // Initialize the free list of extra buckets
+    printf("Initializing extra buckets freelist (%zu buckets)\n",
+           num_extra_buckets);
+    extra_bucket_free_list.reserve(num_extra_buckets);
     for (size_t i = 0; i < num_extra_buckets; i++) {
       extra_bucket_free_list.push_back(i + 1);  // Extra-buckets are 1-based
     }
@@ -115,7 +127,14 @@ class HashMap {
 
   // Initialize the contents of both regular and extra buckets
   void reset() {
+    printf("Resetting hash table. This might take a while.\n");
+    double print_fraction = 0.01;
     for (size_t bkt_i = 0; bkt_i < num_total_buckets; bkt_i++) {
+      if (bkt_i >= num_extra_buckets * print_fraction) {
+        printf("%.2f fraction done\n", print_fraction);
+        print_fraction += 0.01;
+      }
+
       Bucket& bucket = buckets_[bkt_i];
 
       for (size_t i = 0; i < kSlotsPerBucket; i++) {
@@ -127,7 +146,7 @@ class HashMap {
   }
 
   void prefetch_table(uint64_t key_hash) const {
-    size_t bucket_index = key_hash % kNumRegularBuckets;
+    size_t bucket_index = key_hash & (num_regular_buckets - 1);
     const Bucket* bucket = &buckets_[bucket_index];
 
     __builtin_prefetch(bucket, 0, 0);
@@ -165,7 +184,7 @@ class HashMap {
   bool get(uint64_t key_hash, const Key& key, Value& out_value) const {
     assert(key != invalid_key);
 
-    size_t bucket_index = key_hash % kNumRegularBuckets;
+    size_t bucket_index = key_hash & (num_regular_buckets - 1);
     Bucket* bucket = &buckets_[bucket_index];
 
     Bucket* located_bucket;
@@ -185,7 +204,6 @@ class HashMap {
     assert(extra_bucket_index >= 1);
     extra_bucket_free_list.pop_back();
 
-    printf("Allocating extra bucket idx %zu\n", extra_bucket_index);
     bucket->next_extra_bucket_idx = extra_bucket_index;
     return true;
   }
@@ -227,7 +245,7 @@ class HashMap {
     assert(key != invalid_key);
 
     // XXX Persist
-    size_t bucket_index = key_hash % kNumRegularBuckets;
+    size_t bucket_index = key_hash & (num_regular_buckets - 1);
     Bucket* bucket = &buckets_[bucket_index];
     Bucket* located_bucket;
     size_t item_index = find_item_index(bucket, key, &located_bucket);
@@ -258,6 +276,7 @@ class HashMap {
   };
 
   std::string name;  // Name of the table
+  const size_t num_regular_buckets;
   const size_t num_extra_buckets;
   const size_t num_total_buckets;  // Total of regular and extra buckets
   const Key invalid_key;
