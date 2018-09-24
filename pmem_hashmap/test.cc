@@ -1,8 +1,9 @@
 #include <assert.h>
 #include <gtest/gtest.h>
+#include <map>
 #include "mica_pmem.h"
 
-TEST(InsertTest, Test) {
+TEST(Basic, Simple) {
   mica::HashMap<size_t, size_t> hashmap("/dev/dax0.0", 1.0);
   bool success = hashmap.set(1, 1);
   assert(success);
@@ -28,6 +29,30 @@ TEST(InsertTest, Test) {
   success = hashmap.get(4, val);
   assert(val == 2);
   assert(!success);
+}
+
+TEST(Basic, Overload) {
+  mica::HashMap<size_t, size_t> hashmap("/dev/dax0.0", 1.0);
+
+  size_t num_keys = hashmap.get_key_capacity();
+  std::map<size_t, bool> insert_success_map;
+  size_t num_success = 0;
+
+  for (size_t i = 1; i <= num_keys; i++) {
+    bool success = hashmap.set(i, i);
+    insert_success_map[i] = success;
+
+    if (success) num_success++;
+  }
+
+  printf("Loaded fraction = %.2f\n", num_success * 1.0 / num_keys);
+
+  for (size_t i = 1; i <= num_keys; i++) {
+    size_t v;
+    bool success = hashmap.get(i, v);
+    assert(success == insert_success_map[i]);
+    if (success) assert(v == i);
+  }
 }
 
 int main(int argc, char **argv) {

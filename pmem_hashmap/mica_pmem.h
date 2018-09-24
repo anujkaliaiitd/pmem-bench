@@ -158,10 +158,13 @@ class HashMap {
   }
 
   bool get(const Key& key, Value& out_value) const {
+    assert(key != invalid_key);
     get(get_hash(key), key, out_value);
   }
 
   bool get(uint64_t key_hash, const Key& key, Value& out_value) const {
+    assert(key != invalid_key);
+
     size_t bucket_index = key_hash % kNumRegularBuckets;
     Bucket* bucket = &buckets_[bucket_index];
 
@@ -170,39 +173,11 @@ class HashMap {
     if (item_index == kSlotsPerBucket) return false;
 
     // printf("get key %zu, bucket %p, index %zu\n",
-    //       key, located_bucket, item_index);
+    //      key, located_bucket, item_index);
 
     out_value = located_bucket->val_arr[item_index];
     return true;
   }
-
-  bool set(const Key& key, const Value& value) {
-    set(get_hash(key), key, value);
-  }
-
-  bool set(uint64_t key_hash, const Key& key, const Value& value) {
-    // XXX Persist
-    size_t bucket_index = key_hash % kNumRegularBuckets;
-    Bucket* bucket = &buckets_[bucket_index];
-    Bucket* located_bucket;
-    size_t item_index = find_item_index(bucket, key, &located_bucket);
-
-    if (item_index == kSlotsPerBucket) {
-      item_index = get_empty(bucket, &located_bucket);
-      if (item_index == kSlotsPerBucket) return false;
-    }
-
-    // printf("set key %zu, value %zu, bucket %p, index %zu\n",
-    //       key, value, located_bucket, item_index);
-    located_bucket->key_arr[item_index] = key;
-    located_bucket->val_arr[item_index] = value;
-
-    return true;
-  }
-
-  void print_buckets() const;
-  void print_stats() const;
-  void reset_stats(bool reset_count);
 
   bool alloc_extra_bucket(Bucket* bucket) {
     if (extra_bucket_free_list.empty()) return false;
@@ -210,6 +185,7 @@ class HashMap {
     assert(extra_bucket_index >= 1);
     extra_bucket_free_list.pop_back();
 
+    printf("Allocating extra bucket idx %zu\n", extra_bucket_index);
     bucket->next_extra_bucket_idx = extra_bucket_index;
     return true;
   }
@@ -242,8 +218,44 @@ class HashMap {
     }
   }
 
+  bool set(const Key& key, const Value& value) {
+    assert(key != invalid_key);
+    set(get_hash(key), key, value);
+  }
+
+  bool set(uint64_t key_hash, const Key& key, const Value& value) {
+    assert(key != invalid_key);
+
+    // XXX Persist
+    size_t bucket_index = key_hash % kNumRegularBuckets;
+    Bucket* bucket = &buckets_[bucket_index];
+    Bucket* located_bucket;
+    size_t item_index = find_item_index(bucket, key, &located_bucket);
+
+    if (item_index == kSlotsPerBucket) {
+      item_index = get_empty(bucket, &located_bucket);
+      if (item_index == kSlotsPerBucket) return false;
+    }
+
+    // printf("set key %zu, value %zu, bucket %p, index %zu\n",
+    //       key, value, located_bucket, item_index);
+    located_bucket->key_arr[item_index] = key;
+    located_bucket->val_arr[item_index] = value;
+
+    return true;
+  }
+
+  void print_buckets() const;
+  void print_stats() const;
+  void reset_stats(bool reset_count);
+
   void print_bucket(const Bucket* bucket) const;
   void print_bucket_occupancy();
+
+  // Return the number of keys that can be stored in this table
+  size_t get_key_capacity() const {
+    return num_total_buckets * kSlotsPerBucket;
+  };
 
   std::string name;  // Name of the table
   const size_t num_extra_buckets;
