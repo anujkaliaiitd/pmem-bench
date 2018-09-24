@@ -31,21 +31,27 @@ class HashMap {
     Slot slot_arr[kSlotsPerBucket];
   };
 
+  // A redo log entry is committed iff its sequence number is less than or equal
+  // to the committed_seq_num.
   class RedoLogEntry {
    public:
-    size_t operation_number;  // Operation number of this entry. Zero is invalid
+    size_t seq_num;  // Sequence number of this entry. Zero is invalid.
     Key key;
     Value value;
 
     // Align to 256 bytes
-    char padding[256 - (sizeof(size_t) + sizeof(Key) + sizeof(Value) +
-                        sizeof(size_t))];
+    char padding[256 - (sizeof(size_t) + sizeof(Key) + sizeof(Value))];
 
-    RedoLogEntry(size_t operation_number, Key key, Value value)
-        : operation_number(operation_number), key(key), value(value) {}
+    RedoLogEntry(size_t seq_num, Key key, Value value)
+        : seq_num(seq_num), key(key), value(value) {}
     RedoLogEntry() {}
   };
   static_assert(sizeof(RedoLogEntry) == 256, "");
+
+  class RedoLog {
+    size_t committed_seq_num;
+    RedoLogEntry entries[kNumRedoLogEntries];
+  };
 
   // Allocate a hash table with space for \p num_keys keys, and chain overflow
   // room for \p overhead_fraction of the keys
@@ -56,7 +62,7 @@ class HashMap {
         invalid_key(get_invalid_key()) {
     rt_assert(num_keys >= kSlotsPerBucket);  // At least one bucket
     int is_pmem;
-    uint8_t* pbuf = reinterpret_cast<uint8_t*>(
+    pbuf = reinterpret_cast<uint8_t*>(
         pmem_map_file(pmem_file.c_str(), 0 /* length */, 0 /* flags */, 0666,
                       &mapped_len, &is_pmem));
 
@@ -74,10 +80,10 @@ class HashMap {
     }
     rt_assert(is_pmem == 1, "File is not pmem");
 
-    // Initialize redo log entries
-    redo_log_entry_arr = reinterpret_cast<RedoLogEntry*>(pbuf);
-    pmem_memset_persist(redo_log_entry_arr, 0,
-                        kNumRedoLogEntries * sizeof(RedoLogEntry));
+    // Set the committed sequence number, and all redo log entry sequence
+    // numbers to zero.
+    redo_log = reinterpret_cast<RedoLog*>(pbuf);
+    pmem_memset_persist(redo_log, 0, sizeof(RedoLog));
 
     // Initialize buckets
     size_t bucket_offset = roundup<256>(kMaxBatchSize * sizeof(RedoLogEntry));
@@ -102,9 +108,7 @@ class HashMap {
   }
 
   ~HashMap() {
-    // redo_log_entry_arr = pbuf
-    if (redo_log_entry_arr != nullptr)
-      pmem_unmap(redo_log_entry_arr, mapped_len);
+    if (pbuf != nullptr) pmem_unmap(pbuf, mapped_len);
   }
 
   static size_t get_hash(const Key& k) {
@@ -303,9 +307,10 @@ class HashMap {
 
   std::vector<size_t> extra_bucket_free_list;
 
-  size_t mapped_len;
-  RedoLogEntry* redo_log_entry_arr;
-  size_t cur_operation_number = RedoLogEntry::kInvalidOperationNumber;
+  uint8_t* pbuf;      // The buffer returned by libpmem during mmap
+  size_t mapped_len;  // The length mapped by libpmem
+  RedoLog* redo_log;
+  size_t cur_sequence_number = 0;
 };
 
 }  // namespace mica
