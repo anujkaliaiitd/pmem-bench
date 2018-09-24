@@ -58,7 +58,7 @@ TEST(Basic, Overload) {
 }
 
 TEST(Basic, Large) {
-  mica::HashMap<size_t, size_t> hashmap("/dev/dax0.0", MB(32), 1.0);
+  mica::HashMap<size_t, size_t> hashmap("/dev/dax0.0", GB(1), 0.2);
 
   size_t num_keys = 32;
   std::map<size_t, bool> insert_success_map;

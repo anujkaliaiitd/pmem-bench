@@ -104,7 +104,7 @@ class HashMap {
            num_extra_buckets);
     extra_bucket_free_list.reserve(num_extra_buckets);
     for (size_t i = 0; i < num_extra_buckets; i++) {
-      extra_bucket_free_list.push_back(i + 1);  // Extra-buckets are 1-based
+      extra_bucket_free_list[i] = i + 1;
     }
 
     reset();
@@ -129,21 +129,15 @@ class HashMap {
   // Initialize the contents of both regular and extra buckets
   void reset() {
     printf("Resetting hash table. This might take a while.\n");
-    double print_fraction = 0.1;
-    for (size_t bkt_i = 0; bkt_i < num_total_buckets; bkt_i++) {
-      if (bkt_i >= num_total_buckets * print_fraction) {
-        printf("%.2f fraction done\n", print_fraction);
-        print_fraction += 0.1;
-      }
 
-      Bucket& bucket = buckets_[bkt_i];
+    double GB_to_memset = num_total_buckets * sizeof(Bucket) * 1.0 / GB(1);
+    printf("Required time ~ %.2f seconds\n", GB_to_memset / 3.0);
 
-      for (size_t i = 0; i < kSlotsPerBucket; i++) {
-        // XXX: Persist
-        bucket.key_arr[i] = invalid_key;
-        bucket.next_extra_bucket_idx = 0;
-      }
-    }
+    // We need to achieve the following:
+    //  * bucket.key_arr[i] = invalid_key;
+    //  * bucket.next_extra_bucket_idx = 0;
+    // pmem_memset_persist() uses SIMD, so it's faster
+    pmem_memset_persist(&buckets_[0], 0, num_total_buckets * sizeof(Bucket));
   }
 
   void prefetch_table(uint64_t key_hash) const {
