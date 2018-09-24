@@ -49,6 +49,7 @@ class HashMap {
   static_assert(sizeof(RedoLogEntry) == 256, "");
 
   class RedoLog {
+   public:
     size_t committed_seq_num;
     RedoLogEntry entries[kNumRedoLogEntries];
   };
@@ -198,11 +199,15 @@ class HashMap {
       if (is_set[i]) {
         all_gets = false;
         RedoLogEntry v_rle(cur_sequence_number, key_arr[i], value_arr[i]);
-        cur_sequence_number++;  // Just the in-memory copy
+
+        // Drain all pending writes to the table when we reuse log entries
+        if (cur_sequence_number % kNumRedoLogEntries == 0) pmem_drain();
 
         RedoLogEntry& p_rle =
             redo_log->entries[cur_sequence_number % kNumRedoLogEntries];
         pmem_memcpy_nodrain(&p_rle, &v_rle, sizeof(RedoLogEntry));
+
+        cur_sequence_number++;  // Just the in-memory copy
       }
     }
 
@@ -346,7 +351,7 @@ class HashMap {
   uint8_t* pbuf;      // The buffer returned by libpmem during mmap
   size_t mapped_len;  // The length mapped by libpmem
   RedoLog* redo_log;
-  size_t cur_sequence_number = 0;
+  size_t cur_sequence_number = 1;
 };
 
 }  // namespace mica

@@ -2,58 +2,48 @@
 #include "mica_pmem.h"
 
 static constexpr size_t kDefaultFileOffset = 0;
+mica::HashMap<size_t, size_t> *hashmap;
 
-int main() {
-  mica::HashMap<size_t, size_t> hashmap("/dev/dax0.0", kDefaultFileOffset,
-                                        GB(1), 0.2);
+static constexpr size_t kNumProbeKeys = MB(8);
 
-  size_t num_keys = MB(8);
+void batch_gets(size_t batch_size) {
+  printf("GET experiment, batch size %zu\n", batch_size);
 
-  // SET
-  printf("SET experiment\n");
   struct timespec start;
+  bool is_set_arr[mica::kMaxBatchSize];
+  size_t key_arr[mica::kMaxBatchSize];
+  size_t val_arr[mica::kMaxBatchSize];
+  bool success_arr[mica::kMaxBatchSize];
   clock_gettime(CLOCK_REALTIME, &start);
+
   size_t num_success = 0;
-  for (size_t i = 1; i <= num_keys; i++) {
-    num_success += (hashmap.set_nodrain(i, i) == true);
-  }
-  double seconds = sec_since(start);
-
-  printf("SET perf = %.2f M/s. Success percent = %.4f\n",
-         num_keys / (seconds * 1000000), num_success * 1.0 / num_keys);
-
-  // GET
-  printf("GET experiment\n");
-  clock_gettime(CLOCK_REALTIME, &start);
-  num_success = 0;
-  for (size_t i = 1; i <= num_keys; i++) {
-    size_t v;
-    num_success += hashmap.get(i, v);
-  }
-  seconds = sec_since(start);
-  printf("GET perf = %.2f M/s. Success percent = %.4f\n",
-         num_keys / (seconds * 1000000), num_success * 1.0 / num_keys);
-
-  // Batched GET
-  printf("Batched GET experiment\n");
-  static constexpr size_t kBatchSize = 10;
-  size_t key_arr[kBatchSize];
-  size_t val_arr[kBatchSize];
-  bool success_arr[kBatchSize];
-  clock_gettime(CLOCK_REALTIME, &start);
-  num_success = 0;
-  for (size_t i = 1; i <= num_keys; i += kBatchSize) {
-    for (size_t j = 0; j < kBatchSize; j++) {
+  for (size_t i = 1; i <= kNumProbeKeys; i += batch_size) {
+    for (size_t j = 0; j < batch_size; j++) {
+      is_set_arr[j] = false;
       key_arr[j] = i + j;
     }
 
-    // hashmap.get(key_arr, val_arr, success_arr, kBatchSize);
-    for (size_t j = 0; j < kBatchSize; j++) {
+    hashmap->batch_op_drain(is_set_arr, key_arr, val_arr, success_arr,
+                            batch_size);
+
+    for (size_t j = 0; j < batch_size; j++) {
       num_success += success_arr[j];
     }
   }
 
-  seconds = sec_since(start);
-  printf("Batched GET perf = %.2f M/s. Success percent = %.4f\n",
-         num_keys / (seconds * 1000000), num_success * 1.0 / num_keys);
+  double seconds = sec_since(start);
+  printf("Batched GET perf (%zu per batch ) = %.2f M/s. Success rate = %.4f\n",
+         batch_size, kNumProbeKeys / (seconds * 1000000),
+         num_success * 1.0 / kNumProbeKeys);
+}
+
+int main() {
+  hashmap = new mica::HashMap<size_t, size_t>("/dev/dax0.0", kDefaultFileOffset,
+                                              GB(1), 0.2);
+
+  batch_gets(1);
+  batch_gets(10);
+  batch_gets(16);
+
+  delete hashmap;
 }
