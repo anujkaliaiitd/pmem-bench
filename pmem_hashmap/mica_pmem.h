@@ -8,8 +8,9 @@
 namespace mica {
 
 static constexpr size_t kSlotsPerBucket = 8;
-static constexpr size_t kMaxBatchSize = 16;  // = number of redo log entries
-static constexpr bool kVerbose = 16;         // = number of redo log entries
+static constexpr size_t kMaxBatchSize = 16;
+static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 2;
+static constexpr bool kVerbose = 16;
 
 template <typename Key, typename Value>
 class HashMap {
@@ -32,22 +33,16 @@ class HashMap {
 
   class RedoLogEntry {
    public:
-    static constexpr size_t kInvalidOperationNumber = 0;
-
     size_t operation_number;  // Operation number of this entry. Zero is invalid
     Key key;
     Value value;
-    size_t valid;
 
     // Align to 256 bytes
     char padding[256 - (sizeof(size_t) + sizeof(Key) + sizeof(Value) +
                         sizeof(size_t))];
 
     RedoLogEntry(size_t operation_number, Key key, Value value)
-        : operation_number(operation_number),
-          key(key),
-          value(value),
-          valid(0) {}
+        : operation_number(operation_number), key(key), value(value) {}
     RedoLogEntry() {}
   };
   static_assert(sizeof(RedoLogEntry) == 256, "");
@@ -81,11 +76,8 @@ class HashMap {
 
     // Initialize redo log entries
     redo_log_entry_arr = reinterpret_cast<RedoLogEntry*>(pbuf);
-    for (size_t i = 0; i < kMaxBatchSize; i++) {
-      redo_log_entry_arr[i].operation_number =
-          RedoLogEntry::kInvalidOperationNumber;
-    }
-    pmem_flush(&redo_log_entry_arr[0], kMaxBatchSize * sizeof(RedoLogEntry));
+    pmem_memset_persist(redo_log_entry_arr, 0,
+                        kNumRedoLogEntries * sizeof(RedoLogEntry));
 
     // Initialize buckets
     size_t bucket_offset = roundup<256>(kMaxBatchSize * sizeof(RedoLogEntry));
@@ -170,16 +162,18 @@ class HashMap {
     return kSlotsPerBucket;
   }
 
-  // Batched GET
-  void get(const Key* key, Value* out_value, bool* success, size_t n) const {
-    assert(key != invalid_key);
-    assert(n <= kMaxBatchSize);
-
+  // Batched operation that takes in both GETs and SETs. When this function
+  // returns, all SETs are persistent in the log.
+  void batch_op_drain(bool* is_set, const Key* key, Value* out_value,
+                      bool* success, size_t n) {
     size_t keyhash_arr[kMaxBatchSize];
 
     for (size_t i = 0; i < n; i++) {
       keyhash_arr[i] = get_hash(key[i]);
       prefetch(keyhash_arr[i]);
+
+      if (is_set[i]) {
+      }
     }
 
     for (size_t i = 0; i < n; i++) {
