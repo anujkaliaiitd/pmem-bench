@@ -1,8 +1,11 @@
 #include <map>
 #include "mica_pmem.h"
 
+static constexpr size_t kDefaultFileOffset = 0;
+
 int main() {
-  mica::HashMap<size_t, size_t> hashmap("/dev/dax0.0", GB(1), 0.2);
+  mica::HashMap<size_t, size_t> hashmap("/dev/dax0.0", kDefaultFileOffset,
+                                        GB(1), 0.2);
 
   size_t num_keys = MB(8);
 
@@ -44,7 +47,7 @@ int main() {
       key_arr[j] = i + j;
     }
 
-    hashmap.get(key_arr, val_arr, success_arr, kBatchSize);
+    // hashmap.get(key_arr, val_arr, success_arr, kBatchSize);
     for (size_t j = 0; j < kBatchSize; j++) {
       num_success += success_arr[j];
     }

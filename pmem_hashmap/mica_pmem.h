@@ -55,23 +55,26 @@ class HashMap {
 
   // Allocate a hash table with space for \p num_keys keys, and chain overflow
   // room for \p overhead_fraction of the keys
-  HashMap(std::string pmem_file, size_t num_keys, double overhead_fraction)
+  //
+  // The hash table is stored in pmem_file at \p file_offset
+  HashMap(std::string pmem_file, size_t file_offset, size_t num_keys,
+          double overhead_fraction)
       : num_regular_buckets(rte_align64pow2(num_keys / kSlotsPerBucket)),
         num_extra_buckets(num_regular_buckets * overhead_fraction),
         num_total_buckets(num_regular_buckets + num_extra_buckets),
         invalid_key(get_invalid_key()) {
     rt_assert(num_keys >= kSlotsPerBucket);  // At least one bucket
+    rt_assert(file_offset % 256 == 0);       // Aligned to pmem block
     int is_pmem;
     pbuf = reinterpret_cast<uint8_t*>(
         pmem_map_file(pmem_file.c_str(), 0 /* length */, 0 /* flags */, 0666,
                       &mapped_len, &is_pmem));
 
-    rt_assert(pbuf != nullptr,
-              "pmem_map_file() failed. " + std::string(strerror(errno)));
+    rt_assert(pbuf != nullptr, "pmem_map_file() failed");
+    rt_assert(reinterpret_cast<size_t>(pbuf) % 256 == 0, "pbuf not aligned");
 
-    const size_t reqd_space = kMaxBatchSize * sizeof(RedoLogEntry) +
-                              num_total_buckets * sizeof(Bucket);
-    if (mapped_len < reqd_space) {
+    size_t reqd_space = get_required_bytes(num_keys, overhead_fraction);
+    if (mapped_len - file_offset < reqd_space) {
       fprintf(stderr,
               "pmem file too small. %.2f GB required for hash table "
               "(%zu buckets, bucket size = %zu), but only %.2f GB available\n",
@@ -79,6 +82,8 @@ class HashMap {
               mapped_len * 1.0 / GB(1));
     }
     rt_assert(is_pmem == 1, "File is not pmem");
+
+    pbuf = (pbuf + file_offset);
 
     // Set the committed sequence number, and all redo log entry sequence
     // numbers to zero.
@@ -109,6 +114,16 @@ class HashMap {
 
   ~HashMap() {
     if (pbuf != nullptr) pmem_unmap(pbuf, mapped_len);
+  }
+
+  /// Return the total bytes required for a table with \p num_keys keys and
+  /// \p overhead_fraction extra buckets. The returned space includes redo log.
+  static size_t get_required_bytes(size_t num_keys, double overhead_fraction) {
+    size_t num_regular_buckets = rte_align64pow2(num_keys / kSlotsPerBucket);
+    size_t num_extra_buckets = num_regular_buckets * overhead_fraction;
+    size_t num_total_buckets = num_regular_buckets + num_extra_buckets;
+
+    return sizeof(RedoLog) + num_total_buckets * sizeof(Bucket);
   }
 
   static size_t get_hash(const Key& k) {

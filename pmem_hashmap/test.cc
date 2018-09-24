@@ -3,9 +3,12 @@
 #include <map>
 #include "mica_pmem.h"
 
+static constexpr size_t kDefaultFileOffset = 1024;
+
 TEST(Basic, Simple) {
   size_t num_keys = 32;
-  mica::HashMap<size_t, size_t> hashmap("/dev/dax0.0", num_keys, 1.0);
+  mica::HashMap<size_t, size_t> hashmap("/dev/dax0.0", kDefaultFileOffset,
+                                        num_keys, 1.0);
 
   bool success = hashmap.set_nodrain(1, 1);
   assert(success);
@@ -35,7 +38,8 @@ TEST(Basic, Simple) {
 
 TEST(Basic, Overload) {
   size_t num_keys = 32;
-  mica::HashMap<size_t, size_t> hashmap("/dev/dax0.0", num_keys, 1.0);
+  mica::HashMap<size_t, size_t> hashmap("/dev/dax0.0", kDefaultFileOffset,
+                                        num_keys, 1.0);
 
   std::map<size_t, bool> insert_success_map;
   size_t num_success = 0;
@@ -58,7 +62,8 @@ TEST(Basic, Overload) {
 }
 
 TEST(Basic, Large) {
-  mica::HashMap<size_t, size_t> hashmap("/dev/dax0.0", GB(1), 0.2);
+  mica::HashMap<size_t, size_t> hashmap("/dev/dax0.0", kDefaultFileOffset,
+                                        GB(1), 0.2);
 
   size_t num_keys = 32;
   std::map<size_t, bool> insert_success_map;
