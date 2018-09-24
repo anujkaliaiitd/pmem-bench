@@ -11,7 +11,6 @@ static constexpr size_t kSlotsPerBucket = 8;
 static constexpr size_t kNumRegularBuckets = 8;
 static constexpr double kExtraBucketsFraction = .2;
 static constexpr size_t kMaxBatchSize = 16;  // = number of redo log entries
-static constexpr bool kVerbose = true;
 
 template <typename Key, typename Value>
 class HashMap {
@@ -29,7 +28,7 @@ class HashMap {
   };
 
   struct Bucket {
-    size_t next_extra_bucket_index;  // 1-base; 0 = no extra bucket
+    size_t next_extra_bucket_idx;  // 1-base; 0 = no extra bucket
     Key key_arr[kSlotsPerBucket];
     Value val_arr[kSlotsPerBucket];
   };
@@ -84,9 +83,17 @@ class HashMap {
     size_t bucket_offset = roundup<256>(kMaxBatchSize * sizeof(RedoLogEntry));
     buckets_ = reinterpret_cast<Bucket*>(&pbuf[bucket_offset]);
 
+    // extra_buckets_[0] is the actually the last regular bucket. extra_buckets_
+    // is indexed starting from one, so the last regular bucket is never used
+    // as an extra bucket.
     extra_buckets_ =
         reinterpret_cast<Bucket*>(reinterpret_cast<uint8_t*>(buckets_) +
                                   ((kNumRegularBuckets - 1) * sizeof(Bucket)));
+
+    // Initialize the free list of extra buckets
+    for (size_t i = 0; i < num_extra_buckets; i++) {
+      extra_bucket_free_list.push_back(i + 1);  // Extra-buckets are 1-based
+    }
 
     reset();
   }
@@ -107,21 +114,16 @@ class HashMap {
     return ret;
   }
 
+  // Initialize the contents of both regular and extra buckets
   void reset() {
-    // Initialize both regular and extra buckets
     for (size_t bkt_i = 0; bkt_i < num_total_buckets; bkt_i++) {
       Bucket& bucket = buckets_[bkt_i];
 
       for (size_t i = 0; i < kSlotsPerBucket; i++) {
         // XXX: Persist
         bucket.key_arr[i] = invalid_key;
-        bucket.next_extra_bucket_index = 0;
+        bucket.next_extra_bucket_idx = 0;
       }
-    }
-
-    // Initialize the free list of extra buckets
-    for (size_t i = 0; i < num_extra_buckets; i++) {
-      extra_bucket_free_list.push_back(i + 1);  // Extra-buckets are 1-based
     }
   }
 
@@ -132,6 +134,28 @@ class HashMap {
     __builtin_prefetch(bucket, 0, 0);
     __builtin_prefetch(reinterpret_cast<const char*>(bucket) + 64, 0, 0);
     __builtin_prefetch(reinterpret_cast<const char*>(bucket) + 128, 0, 0);
+  }
+
+  // Find a bucket (\p located_bucket) and slot index (return value) in the
+  // chain starting from \p bucket that contains \p key. If no such bucket is
+  // found, return kSlotsPerBucket.
+  size_t find_item_index(Bucket* bucket, const Key& key,
+                         Bucket** located_bucket) const {
+    Bucket* current_bucket = bucket;
+
+    while (true) {
+      for (size_t i = 0; i < kSlotsPerBucket; i++) {
+        if (current_bucket->key_arr[i] != key) continue;
+
+        *located_bucket = current_bucket;
+        return i;
+      }
+
+      if (current_bucket->next_extra_bucket_idx == 0) break;
+      current_bucket = &extra_buckets_[current_bucket->next_extra_bucket_idx];
+    }
+
+    return kSlotsPerBucket;
   }
 
   bool get(const Key& key, Value& out_value) const {
@@ -179,63 +203,39 @@ class HashMap {
   bool alloc_extra_bucket(Bucket* bucket) {
     if (extra_bucket_free_list.empty()) return false;
     size_t extra_bucket_index = extra_bucket_free_list.back();
+    assert(extra_bucket_index >= 1);
     extra_bucket_free_list.pop_back();
 
-    bucket->next_extra_bucket_index = extra_bucket_index;
+    bucket->next_extra_bucket_idx = extra_bucket_index;
     return true;
   }
 
-  void free_extra_bucket(Bucket* bucket);
-  void fill_hole(Bucket* bucket, size_t unused_item_index);
-
-  // Starting from \p bucket, fill in \p located_bucket such that located_bucket
-  // contains an empty slot. The slot index is the return value.
+  // Traverse the bucket chain starting at \p bucket, and fill in \p
+  // located_bucket such that located_bucket contains an empty slot. The empty
+  // slot index is the return value. This might add a new extra bucket to the
+  // chain.
+  //
+  // Return kSlotsPerBucket if an empty slot is not possible
   size_t get_empty(Bucket* bucket, Bucket** located_bucket) {
     Bucket* current_bucket = bucket;
     while (true) {
-      for (size_t item_index = 0; item_index < kNumRegularBuckets;
-           item_index++) {
-        if (current_bucket->key_arr[item_index] == invalid_key) {
+      for (size_t i = 0; i < kSlotsPerBucket; i++) {
+        if (current_bucket->key_arr[i] == invalid_key) {
           *located_bucket = current_bucket;
-          return item_index;
+          return i;
         }
       }
-      if (current_bucket->next_extra_bucket_index == 0) break;
-      current_bucket = &extra_buckets_[current_bucket->next_extra_bucket_index];
+      if (current_bucket->next_extra_bucket_idx == 0) break;
+      current_bucket = &extra_buckets_[current_bucket->next_extra_bucket_idx];
     }
 
     // no space; alloc new extra_bucket
     if (alloc_extra_bucket(current_bucket)) {
-      *located_bucket =
-          &extra_buckets_[current_bucket->next_extra_bucket_index];
+      *located_bucket = &extra_buckets_[current_bucket->next_extra_bucket_idx];
       return 0;  // use the first slot (it should be empty)
     } else {
-      // no free extra_bucket
-      *located_bucket = nullptr;
-      return kSlotsPerBucket;
+      return kSlotsPerBucket;  // No free extra bucket
     }
-  }
-
-  size_t find_item_index(Bucket* bucket, const Key& key,
-                         Bucket** located_bucket) const {
-    Bucket* current_bucket = bucket;
-
-    while (true) {
-      for (size_t i = 0; i < kSlotsPerBucket; i++) {
-        if (current_bucket->key_arr[i] != key) continue;
-
-        if (kVerbose) printf("find item index: %zu\n", i);
-        *located_bucket = current_bucket;
-        return i;
-      }
-
-      if (current_bucket->next_extra_bucket_index != 0) break;
-      current_bucket = &extra_buckets_[current_bucket->next_extra_bucket_index];
-    }
-
-    if (kVerbose) printf("could not find item index\n");
-    *located_bucket = nullptr;
-    return kSlotsPerBucket;
   }
 
   void print_bucket(const Bucket* bucket) const;
