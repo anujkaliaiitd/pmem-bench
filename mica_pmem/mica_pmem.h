@@ -12,7 +12,29 @@ static constexpr size_t kMaxBatchSize = 16;
 static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 8;
 static constexpr bool kVerbose = 16;
 
+static constexpr bool kUsePmem = true;
+static constexpr bool kEnablePrefetch = true;
 static constexpr bool kEnableRedoLogging = true;
+
+// Redo logging enabled => use pmem
+static_assert(!kUsePmem || kEnableRedoLogging, "");
+
+// These functions allow switching easily between pmem and DRAM
+void maybe_pmem_drain() {
+  if (kUsePmem) pmem_drain();
+}
+
+void maybe_pmem_memcpy_persist(void* dest, const void* src, size_t len) {
+  kUsePmem ? pmem_memcpy_persist(dest, src, len) : memcpy(dest, src, len);
+}
+
+void maybe_pmem_memcpy_nodrain(void* dest, const void* src, size_t len) {
+  kUsePmem ? pmem_memcpy_nodrain(dest, src, len) : memcpy(dest, src, len);
+}
+
+void maybe_pmem_memset_persist(void* dest, int c, size_t len) {
+  kUsePmem ? pmem_memset_persist(dest, c, len) : memset(dest, c, len);
+}
 
 template <typename Key, typename Value>
 class HashMap {
@@ -54,29 +76,16 @@ class HashMap {
     size_t committed_seq_num;
   };
 
-  // Allocate a hash table with space for \p num_keys keys, and chain overflow
-  // room for \p overhead_fraction of the keys
-  //
-  // The hash table is stored in pmem_file at \p file_offset
-  HashMap(std::string pmem_file, size_t file_offset, size_t num_keys,
-          double overhead_fraction)
-      : num_regular_buckets(rte_align64pow2(num_keys / kSlotsPerBucket)),
-        num_extra_buckets(num_regular_buckets * overhead_fraction),
-        num_total_buckets(num_regular_buckets + num_extra_buckets),
-        invalid_key(get_invalid_key()) {
-    rt_assert(num_keys >= kSlotsPerBucket);  // At least one bucket
-    rt_assert(file_offset % 256 == 0);       // Aligned to pmem block
+  // Initialize the persistent buffer for this hash table. This modifies only
+  // mapped_len.
+  uint8_t* map_pbuf(size_t& _mapped_len) const {
     int is_pmem;
-    pbuf = reinterpret_cast<uint8_t*>(
+    uint8_t* pbuf = reinterpret_cast<uint8_t*>(
         pmem_map_file(pmem_file.c_str(), 0 /* length */, 0 /* flags */, 0666,
-                      &mapped_len, &is_pmem));
+                      &_mapped_len, &is_pmem));
 
     rt_assert(pbuf != nullptr, "pmem_map_file() failed");
     rt_assert(reinterpret_cast<size_t>(pbuf) % 256 == 0, "pbuf not aligned");
-
-    size_t reqd_space = get_required_bytes(num_keys, overhead_fraction);
-    printf("Space required = %.1f GB, key capacity = %.1f M\n",
-           reqd_space * 1.0 / GB(1), get_key_capacity() / 1000000.0);
 
     if (mapped_len - file_offset < reqd_space) {
       fprintf(stderr,
@@ -87,16 +96,44 @@ class HashMap {
     }
     rt_assert(is_pmem == 1, "File is not pmem");
 
-    pbuf = (pbuf + file_offset);
+    return pbuf + file_offset;
+  }
 
-    // Set the committed sequence number, and all redo log entry sequence
-    // numbers to zero.
-    redo_log = reinterpret_cast<RedoLog*>(pbuf);
-    pmem_memset_persist(redo_log, 0, sizeof(RedoLog));
+  // Allocate a hash table with space for \p num_keys keys, and chain overflow
+  // room for \p overhead_fraction of the keys
+  //
+  // The hash table is stored in pmem_file at \p file_offset
+  HashMap(std::string pmem_file, size_t file_offset, size_t num_requested_keys,
+          double overhead_fraction)
+      : pmem_file(pmem_file),
+        file_offset(file_offset),
+        num_requested_keys(num_requested_keys),
+        overhead_fraction(overhead_fraction),
+        num_regular_buckets(
+            rte_align64pow2(num_requested_keys / kSlotsPerBucket)),
+        num_extra_buckets(num_regular_buckets * overhead_fraction),
+        num_total_buckets(num_regular_buckets + num_extra_buckets),
+        reqd_space(get_required_bytes(num_requested_keys, overhead_fraction)),
+        invalid_key(get_invalid_key()) {
+    rt_assert(num_requested_keys >= kSlotsPerBucket);  // At least one bucket
+    rt_assert(file_offset % 256 == 0);                 // Aligned to pmem block
+
+    printf("Space required = %.1f GB, key capacity = %.1f M\n",
+           reqd_space * 1.0 / GB(1), get_key_capacity() / 1000000.0);
+
+    if (kUsePmem) {
+      maybe_pbuf = map_pbuf(mapped_len);
+    } else {
+      maybe_pbuf = reinterpret_cast<uint8_t*>(malloc(reqd_space));
+    }
+
+    // Set the committed seq num, and all redo log entry seq nums to zero.
+    redo_log = reinterpret_cast<RedoLog*>(maybe_pbuf);
+    maybe_pmem_memset_persist(redo_log, 0, sizeof(RedoLog));
 
     // Initialize buckets
     size_t bucket_offset = roundup<256>(sizeof(RedoLog));
-    buckets_ = reinterpret_cast<Bucket*>(&pbuf[bucket_offset]);
+    buckets_ = reinterpret_cast<Bucket*>(&maybe_pbuf[bucket_offset]);
 
     // extra_buckets_[0] is the actually the last regular bucket. extra_buckets_
     // is indexed starting from one, so the last regular bucket is never used
@@ -117,13 +154,17 @@ class HashMap {
   }
 
   ~HashMap() {
-    if (pbuf != nullptr) pmem_unmap(pbuf, mapped_len);
+    if (kUsePmem && maybe_pbuf != nullptr)
+      pmem_unmap(maybe_pbuf - file_offset, mapped_len);
   }
 
-  /// Return the total bytes required for a table with \p num_keys keys and
-  /// \p overhead_fraction extra buckets. The returned space includes redo log.
-  static size_t get_required_bytes(size_t num_keys, double overhead_fraction) {
-    size_t num_regular_buckets = rte_align64pow2(num_keys / kSlotsPerBucket);
+  /// Return the total bytes required for a table with \p num_requested_keys
+  /// keys and \p overhead_fraction extra buckets. The returned space includes
+  /// redo log.
+  static size_t get_required_bytes(size_t num_requested_keys,
+                                   double overhead_fraction) {
+    size_t num_regular_buckets =
+        rte_align64pow2(num_requested_keys / kSlotsPerBucket);
     size_t num_extra_buckets = num_regular_buckets * overhead_fraction;
     size_t num_total_buckets = num_regular_buckets + num_extra_buckets;
 
@@ -150,10 +191,13 @@ class HashMap {
     //  * bucket.slot[i].key = invalid_key;
     //  * bucket.next_extra_bucket_idx = 0;
     // pmem_memset_persist() uses SIMD, so it's faster
-    pmem_memset_persist(&buckets_[0], 0, num_total_buckets * sizeof(Bucket));
+    maybe_pmem_memset_persist(&buckets_[0], 0,
+                              num_total_buckets * sizeof(Bucket));
   }
 
   void prefetch(uint64_t key_hash) const {
+    if (!kEnablePrefetch) return;
+
     size_t bucket_index = key_hash & (num_regular_buckets - 1);
     const Bucket* bucket = &buckets_[bucket_index];
 
@@ -203,20 +247,20 @@ class HashMap {
         RedoLogEntry v_rle(cur_sequence_number, key_arr[i], value_arr[i]);
 
         // Drain all pending writes to the table when we reuse log entries
-        if (cur_sequence_number % kNumRedoLogEntries == 0) pmem_drain();
+        if (cur_sequence_number % kNumRedoLogEntries == 0) maybe_pmem_drain();
 
         RedoLogEntry& p_rle =
             redo_log->entries[cur_sequence_number % kNumRedoLogEntries];
-        pmem_memcpy_nodrain(&p_rle, &v_rle, sizeof(RedoLogEntry));
+        maybe_pmem_memcpy_nodrain(&p_rle, &v_rle, sizeof(v_rle));
 
         cur_sequence_number++;  // Just the in-memory copy
       }
     }
 
     if (kEnableRedoLogging && !all_gets) {
-      pmem_drain();  // Block until the redo log entries become persistent
-      pmem_memcpy_persist(&redo_log->committed_seq_num, &cur_sequence_number,
-                          sizeof(size_t));
+      maybe_pmem_drain();  // Block until the redo log entries are persistent
+      maybe_pmem_memcpy_persist(&redo_log->committed_seq_num,
+                                &cur_sequence_number, sizeof(size_t));
     }
 
     for (size_t i = 0; i < n; i++) {
@@ -257,8 +301,8 @@ class HashMap {
     extra_bucket_free_list.pop_back();
 
     // This is an eight-byte operation, so no need in redo log
-    pmem_memcpy_persist(&bucket->next_extra_bucket_idx, &extra_bucket_index,
-                        sizeof(extra_bucket_index));
+    maybe_pmem_memcpy_persist(&bucket->next_extra_bucket_idx,
+                              &extra_bucket_index, sizeof(extra_bucket_index));
     return true;
   }
 
@@ -323,9 +367,12 @@ class HashMap {
     Slot s(key, value);
 
     if (kEnableRedoLogging) {
-      pmem_memcpy_nodrain(&located_bucket->slot_arr[item_index], &s, sizeof(s));
+      maybe_pmem_memcpy_nodrain(&located_bucket->slot_arr[item_index], &s,
+                                sizeof(s));
     } else {
-      pmem_memcpy_persist(&located_bucket->slot_arr[item_index], &s, sizeof(s));
+      // For the DRAM case, this can be a bit faster
+      maybe_pmem_memcpy_persist(&located_bucket->slot_arr[item_index], &s,
+                                sizeof(s));
     }
 
     return true;
@@ -336,10 +383,16 @@ class HashMap {
     return num_total_buckets * kSlotsPerBucket;
   };
 
-  std::string name;                  // Name of the table
+  // Constructor args
+  const std::string pmem_file;      // Name of the pmem file
+  const size_t file_offset;         // Offset in file where the table is placed
+  const size_t num_requested_keys;  // User's requested key capacity
+  const double overhead_fraction;   // User's requested key capacity
+
   const size_t num_regular_buckets;  // Power-of-two number of main buckets
   const size_t num_extra_buckets;    // num_regular_buckets * overhead_fraction
   const size_t num_total_buckets;    // Sum of regular and extra buckets
+  const size_t reqd_space;           // Total bytes needed for the table
   const Key invalid_key;
   Bucket* buckets_ = nullptr;
 
@@ -349,8 +402,8 @@ class HashMap {
 
   std::vector<size_t> extra_bucket_free_list;
 
-  uint8_t* pbuf;      // The buffer returned by libpmem during mmap
-  size_t mapped_len;  // The length mapped by libpmem
+  uint8_t* maybe_pbuf;  // The pmem or DRAM buffer for this table
+  size_t mapped_len;    // The length mapped by libpmem
   RedoLog* redo_log;
   size_t cur_sequence_number = 1;
 };
