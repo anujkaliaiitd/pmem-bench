@@ -163,9 +163,8 @@ class HugeAlloc {
    * allocator's freelists. Unlike \p alloc(), the size of the allocated memory
    * need not fit in the allocator's max class size.
    *
-   * Optionally, the caller can bypass memory registration. Allocated memory can
-   * be freed only when this allocator is destroyed, i.e., free_buf() cannot be
-   * used.
+   * Allocated memory can be freed only when this allocator is destroyed, i.e.,
+   * free_buf() cannot be used. Use alloc() if freeing is needed.
    *
    * @param size The minimum size of the allocated memory
    *
