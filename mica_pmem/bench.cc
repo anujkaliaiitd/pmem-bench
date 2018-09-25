@@ -5,7 +5,7 @@
 // Other pmem benchmarks use the first terabyte on intel-1. Beyond 1 TB, we
 // save the hash map so that we don't have to populate it repeatedly.
 static constexpr size_t kDefaultFileOffset = GB(1024);
-static constexpr size_t kTableKeyCapacity = MB(4);
+static constexpr size_t kTableKeyCapacity = MB(512);
 
 // MICA's ``small'' workload: 16-byte keys and 64-byte values
 class Key {
