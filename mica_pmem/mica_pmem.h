@@ -76,7 +76,7 @@ class HashMap {
 
     size_t reqd_space = get_required_bytes(num_keys, overhead_fraction);
     printf("Space required = %.1f GB, key capacity = %.1f M\n",
-           reqd_space * 1.0 / GB(1), get_key_capacity());
+           reqd_space * 1.0 / GB(1), get_key_capacity() / 1000000.0);
 
     if (mapped_len - file_offset < reqd_space) {
       fprintf(stderr,
@@ -142,10 +142,9 @@ class HashMap {
 
   // Initialize the contents of both regular and extra buckets
   void reset() {
-    printf("Resetting hash table. This might take a while.\n");
-
     double GB_to_memset = num_total_buckets * sizeof(Bucket) * 1.0 / GB(1);
-    printf("Required time ~ %.2f seconds\n", GB_to_memset / 3.0);
+    printf("Resetting hash table. This might take a while (~ %.1f seconds)\n",
+           GB_to_memset / 3.0);
 
     // We need to achieve the following:
     //  * bucket.slot[i].key = invalid_key;
