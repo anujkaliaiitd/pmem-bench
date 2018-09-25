@@ -41,7 +41,7 @@ class HashMap {
     Key key;
     Value value;
 
-    char padding[64 - (sizeof(seq_num) + sizeof(key) + sizeof(value))];
+    char padding[128 - (sizeof(seq_num) + sizeof(key) + sizeof(value))];
 
     RedoLogEntry(size_t seq_num, Key key, Value value)
         : seq_num(seq_num), key(key), value(value) {}
@@ -75,7 +75,8 @@ class HashMap {
     rt_assert(reinterpret_cast<size_t>(pbuf) % 256 == 0, "pbuf not aligned");
 
     size_t reqd_space = get_required_bytes(num_keys, overhead_fraction);
-    printf("Space required = %.1f GB\n", reqd_space * 1.0 / GB(1));
+    printf("Space required = %.1f GB, key capacity = %.1f M\n",
+           reqd_space * 1.0 / GB(1), get_key_capacity());
 
     if (mapped_len - file_offset < reqd_space) {
       fprintf(stderr,
@@ -330,13 +331,6 @@ class HashMap {
 
     return true;
   }
-
-  void print_buckets() const;
-  void print_stats() const;
-  void reset_stats(bool reset_count);
-
-  void print_bucket(const Bucket* bucket) const;
-  void print_bucket_occupancy();
 
   // Return the number of keys that can be stored in this table
   size_t get_key_capacity() const {
