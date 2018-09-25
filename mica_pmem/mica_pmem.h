@@ -75,6 +75,8 @@ class HashMap {
     rt_assert(reinterpret_cast<size_t>(pbuf) % 256 == 0, "pbuf not aligned");
 
     size_t reqd_space = get_required_bytes(num_keys, overhead_fraction);
+    printf("Space required = %.1f GB\n", reqd_space * 1.0 / GB(1));
+
     if (mapped_len - file_offset < reqd_space) {
       fprintf(stderr,
               "pmem file too small. %.2f GB required for hash table "
