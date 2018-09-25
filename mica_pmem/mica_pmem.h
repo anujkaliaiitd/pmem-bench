@@ -4,17 +4,18 @@
 #include <city.h>
 #include <libpmem.h>
 #include "../common.h"
+#include "huge_alloc.h"
 
 namespace mica {
 
 static constexpr size_t kSlotsPerBucket = 8;
 static constexpr size_t kMaxBatchSize = 16;
 static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 8;
-static constexpr bool kVerbose = 16;
+static constexpr size_t kNumaNode = 0;
 
-static constexpr bool kUsePmem = true;
+static constexpr bool kUsePmem = false;
 static constexpr bool kEnablePrefetch = true;
-static constexpr bool kEnableRedoLogging = true;
+static constexpr bool kEnableRedoLogging = false;
 
 // Redo logging enabled => use pmem
 static_assert(!kUsePmem || kEnableRedoLogging, "");
@@ -114,7 +115,8 @@ class HashMap {
         num_extra_buckets(num_regular_buckets * overhead_fraction),
         num_total_buckets(num_regular_buckets + num_extra_buckets),
         reqd_space(get_required_bytes(num_requested_keys, overhead_fraction)),
-        invalid_key(get_invalid_key()) {
+        invalid_key(get_invalid_key()),
+        huge_alloc(kNumaNode) {
     rt_assert(num_requested_keys >= kSlotsPerBucket);  // At least one bucket
     rt_assert(file_offset % 256 == 0);                 // Aligned to pmem block
 
@@ -124,7 +126,9 @@ class HashMap {
     if (kUsePmem) {
       maybe_pbuf = map_pbuf(mapped_len);
     } else {
-      maybe_pbuf = reinterpret_cast<uint8_t*>(malloc(reqd_space));
+      hugealloc::Buffer b = huge_alloc.alloc_raw(reqd_space);
+      rt_assert(b.buf != nullptr);
+      maybe_pbuf = b.buf;  // hugealloc will free the allocation
     }
 
     // Set the committed seq num, and all redo log entry seq nums to zero.
@@ -394,6 +398,8 @@ class HashMap {
   const size_t num_total_buckets;    // Sum of regular and extra buckets
   const size_t reqd_space;           // Total bytes needed for the table
   const Key invalid_key;
+  hugealloc::HugeAlloc huge_alloc;
+
   Bucket* buckets_ = nullptr;
 
   // = (buckets + num_buckets); extra_buckets[0] is not used because index 0

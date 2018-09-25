@@ -141,6 +141,10 @@ class HugeAlloc {
     prev_allocation_size = initial_size;
   }
 
+  HugeAlloc(size_t numa_node) : numa_node(numa_node) {
+    prev_allocation_size = kMaxClassSize;
+  }
+
   ~HugeAlloc() {
     // Deregister and delete the created SHM regions
     for (shm_region_t &shm_region : shm_list) {
@@ -193,7 +197,7 @@ class HugeAlloc {
           case EINVAL:
             xmsg << "HugeAlloc: SHM allocation error: SHMMAX/SHMIN "
                  << "mismatch. size = " << std::to_string(size) << " ("
-                 << std::to_string(size / 1024 * 1024) << " MB).";
+                 << std::to_string(size / (1024 * 1024)) << " MB).";
             throw std::runtime_error(xmsg.str());
 
           case ENOMEM:
@@ -201,7 +205,7 @@ class HugeAlloc {
             fprintf(
                 stderr,
                 "HugeAlloc: Insufficient hugepages. Can't reserve %lu MB.\n",
-                size / 1024 * 1024);
+                size / (1024 * 1024));
             return Buffer(nullptr, 0);
 
           default:
