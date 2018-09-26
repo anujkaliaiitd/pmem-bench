@@ -35,8 +35,6 @@ static inline uint64_t fastrange64(uint64_t rand, uint64_t n) {
 typedef mica::HashMap<Key, Value> HashMap;
 
 double batch_gets(HashMap *hashmap, size_t max_key, size_t batch_size) {
-  printf("GET experiment, batch size %zu\n", batch_size);
-
   pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
   constexpr size_t kNumIters = MB(1);
 
@@ -62,8 +60,6 @@ double batch_gets(HashMap *hashmap, size_t max_key, size_t batch_size) {
 
   double seconds = sec_since(start);
   double tput = kNumIters / (seconds * 1000000);
-  printf("Batched GET perf (%zu per batch) = %.2f M/s. Success rate = %.4f\n",
-         batch_size, tput, num_success * 1.0 / kNumIters);
   return tput;
 }
 
@@ -166,8 +162,76 @@ void thread_func(size_t thread_id) {
   delete hashmap;
 }
 
+void sweep_do_one(std::string bench, HashMap *hashmap, size_t max_key,
+                  size_t batch_size) {
+  std::vector<double> tput_vec;
+
+  for (size_t i = 0; i < 10; i++) {
+    double tput;
+    if (bench == "set") tput = batch_sets(hashmap, max_key, batch_size);
+    if (bench == "get") tput = batch_gets(hashmap, max_key, batch_size);
+    tput_vec.push_back(tput);
+  }
+
+  double avg_tput =
+      std::accumulate(tput_vec.begin(), tput_vec.end(), 0.0) / tput_vec.size();
+  double _stddev = stddev(tput_vec);
+
+  printf("Tput (M/s) = %.2f avg, %.2f stddev\n", avg_tput, _stddev);
+}
+
+// Measure the effectiveness of optimizations with one thread
+void sweep_optimizations() {
+  auto *hashmap =
+      new HashMap("/dev/dax0.0", 0, FLAGS_table_key_capacity, kDefaultOverhead);
+
+  printf("Populating hashmap. Expected time = %.1f seconds\n",
+         FLAGS_table_key_capacity / (4.0 * 1000000));  // 4 M/s
+
+  size_t max_key = populate(hashmap);
+
+  std::vector<size_t> batch_size_vec = {1, 8, 16};
+
+  // GET basic
+  for (auto &batch_size : batch_size_vec) {
+    printf("get. Batch size %zu\n", batch_size);
+    sweep_do_one("get", hashmap, max_key, batch_size);
+  }
+
+  // GET optimizations
+  hashmap->opts.prefetch = false;
+  printf("get. Batch size 16, no prefetch.\n");
+  sweep_do_one("get", hashmap, max_key, 16);
+  hashmap->opts.reset();
+
+  // SET basic
+  for (auto &batch_size : batch_size_vec) {
+    printf("set. Batch size %zu\n", batch_size);
+    sweep_do_one("set", hashmap, max_key, batch_size);
+  }
+
+  // SET optimizations
+  hashmap->opts.redo_batch = false;
+  printf("set. Batch size 16, only redo batch disabled\n");
+  sweep_do_one("set", hashmap, max_key, 16);
+  hashmap->opts.reset();
+
+  hashmap->opts.prefetch = false;
+  printf("set. Batch size 16, only prefetch disabled.\n");
+  sweep_do_one("set", hashmap, max_key, 16);
+  hashmap->opts.reset();
+
+  hashmap->opts.nodrain_slot = false;
+  printf("set. Batch size 16, only nodrain_slot disabled.\n");
+  sweep_do_one("set", hashmap, max_key, 16);
+  hashmap->opts.reset();
+
+  delete hashmap;
+}
+
 int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
+  // sweep_optimizations();
 
   std::vector<std::thread> threads(FLAGS_num_threads);
 

@@ -15,13 +15,6 @@ static constexpr size_t kNumaNode = 0;
 
 static constexpr bool kUsePmem = true;
 
-// Optimization options
-static constexpr bool kEnablePrefetch = true;
-static constexpr bool kEnableRedoBatch = true;
-
-// If enabled, the write to the table on SET uses _persist instead of _nodrain
-static constexpr bool kPersistTableOnSet = false;
-
 // These functions allow switching easily between pmem and DRAM
 void maybe_pmem_drain() {
   if (kUsePmem) pmem_drain();
@@ -202,7 +195,7 @@ class HashMap {
   }
 
   void prefetch(uint64_t key_hash) const {
-    if (!kEnablePrefetch) return;
+    if (!opts.prefetch) return;
 
     size_t bucket_index = key_hash & (num_regular_buckets - 1);
     const Bucket* bucket = &buckets_[bucket_index];
@@ -258,7 +251,7 @@ class HashMap {
         RedoLogEntry& p_rle =
             redo_log->entries[cur_sequence_number % kNumRedoLogEntries];
 
-        if (kEnableRedoBatch) {
+        if (opts.redo_batch) {
           // We will write to the committed sequence number later
           maybe_pmem_memcpy_nodrain(&p_rle, &v_rle, sizeof(v_rle));
         } else {
@@ -271,7 +264,7 @@ class HashMap {
       }
     }
 
-    if (kUsePmem && kEnableRedoBatch && !all_gets) {
+    if (kUsePmem && opts.redo_batch && !all_gets) {
       // This is needed only if redo log batching is enabled
       maybe_pmem_drain();  // Block until the redo log entries are persistent
       maybe_pmem_memcpy_persist(&redo_log->committed_seq_num,
@@ -379,11 +372,11 @@ class HashMap {
     // printf("  set key %zu, value %zu success. bucket %p, index %zu\n",
     //      key, value, located_bucket, item_index);
     Slot s(key, value);
-    if (kPersistTableOnSet) {
-      maybe_pmem_memcpy_persist(&located_bucket->slot_arr[item_index], &s,
+    if (opts.nodrain_slot) {
+      maybe_pmem_memcpy_nodrain(&located_bucket->slot_arr[item_index], &s,
                                 sizeof(s));
     } else {
-      maybe_pmem_memcpy_nodrain(&located_bucket->slot_arr[item_index], &s,
+      maybe_pmem_memcpy_persist(&located_bucket->slot_arr[item_index], &s,
                                 sizeof(s));
     }
 
@@ -420,6 +413,20 @@ class HashMap {
   size_t mapped_len;    // The length mapped by libpmem
   RedoLog* redo_log;
   size_t cur_sequence_number = 1;
+
+  struct {
+    bool prefetch = true;    // Software prefetching
+    bool redo_batch = true;  // Redo log batching
+
+    // If enabled, slot writes on SET use _persist instead of _nodrain
+    bool nodrain_slot = true;
+
+    void reset() {
+      prefetch = true;
+      redo_batch = true;
+      nodrain_slot = true;
+    }
+  } opts;
 };
 
 }  // namespace mica
