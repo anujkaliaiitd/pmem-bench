@@ -1,5 +1,5 @@
 batch_size=16
-benchmark=get
+benchmark=set
 
 for ((num_keys = (64 * 1024 * 1024); num_keys <= (64 * 1024 * 1024); num_keys *= 2)); do
   numactl --physcpubind=3 --membind=0 ./bench \

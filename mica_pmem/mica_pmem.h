@@ -15,10 +15,10 @@ static constexpr size_t kNumaNode = 0;
 
 static constexpr bool kUsePmem = true;
 static constexpr bool kEnablePrefetch = true;
-static constexpr bool kEnableRedoLogging = true;
 
-// Redo logging enabled => use pmem
-static_assert(!kEnableRedoLogging || kUsePmem, "");
+// Pmem-only settings
+static constexpr bool kEnableRedoLogging = true;
+static constexpr bool kEnableRedoBatch = true;
 
 // These functions allow switching easily between pmem and DRAM
 void maybe_pmem_drain() {
@@ -246,7 +246,7 @@ class HashMap {
       keyhash_arr[i] = get_hash(key_arr[i]);
       prefetch(keyhash_arr[i]);
 
-      if (kEnableRedoLogging && is_set[i]) {
+      if (kUsePmem && kEnableRedoLogging && is_set[i]) {
         all_gets = false;
         RedoLogEntry v_rle(cur_sequence_number, key_arr[i], value_arr[i]);
 
@@ -255,13 +255,22 @@ class HashMap {
 
         RedoLogEntry& p_rle =
             redo_log->entries[cur_sequence_number % kNumRedoLogEntries];
-        maybe_pmem_memcpy_nodrain(&p_rle, &v_rle, sizeof(v_rle));
+
+        if (kEnableRedoBatch) {
+          // We will write to the committed sequence number later
+          maybe_pmem_memcpy_nodrain(&p_rle, &v_rle, sizeof(v_rle));
+        } else {
+          maybe_pmem_memcpy_persist(&p_rle, &v_rle, sizeof(v_rle));
+          maybe_pmem_memcpy_persist(&redo_log->committed_seq_num,
+                                    &cur_sequence_number, sizeof(size_t));
+        }
 
         cur_sequence_number++;  // Just the in-memory copy
       }
     }
 
-    if (kEnableRedoLogging && !all_gets) {
+    if (kUsePmem && kEnableRedoLogging && kEnableRedoBatch && !all_gets) {
+      // This is needed only if redo log batching is enabled
       maybe_pmem_drain();  // Block until the redo log entries are persistent
       maybe_pmem_memcpy_persist(&redo_log->committed_seq_num,
                                 &cur_sequence_number, sizeof(size_t));
