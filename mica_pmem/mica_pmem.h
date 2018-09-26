@@ -119,8 +119,8 @@ class HashMap {
         reqd_space(get_required_bytes(num_requested_keys, overhead_fraction)),
         invalid_key(get_invalid_key()),
         huge_alloc(kNumaNode) {
-    rt_assert(num_requested_keys >= kSlotsPerBucket);  // At least one bucket
-    rt_assert(file_offset % 256 == 0);                 // Aligned to pmem block
+    rt_assert(num_requested_keys >= kSlotsPerBucket, ">=1 buckets needed");
+    rt_assert(file_offset % 256 == 0, "Unaligned file offset");
 
     printf("Space required = %.4f GB, key capacity = %.4f M\n",
            reqd_space * 1.0 / GB(1), get_key_capacity() / 1000000.0);
@@ -129,7 +129,7 @@ class HashMap {
       maybe_pbuf = map_pbuf(mapped_len);
     } else {
       hugealloc::Buffer b = huge_alloc.alloc_raw(reqd_space);
-      rt_assert(b.buf != nullptr);
+      rt_assert(b.buf != nullptr, "Failed to allocate memory");
       maybe_pbuf = b.buf;  // hugealloc will free the allocation
     }
 
