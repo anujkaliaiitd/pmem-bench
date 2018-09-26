@@ -34,35 +34,6 @@ static inline uint64_t fastrange64(uint64_t rand, uint64_t n) {
 
 typedef mica::HashMap<Key, Value> HashMap;
 
-double batch_gets(HashMap *hashmap, size_t max_key, size_t batch_size) {
-  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
-  constexpr size_t kNumIters = MB(1);
-
-  struct timespec start;
-  bool is_set_arr[mica::kMaxBatchSize];
-  Key key_arr[mica::kMaxBatchSize];
-  Value val_arr[mica::kMaxBatchSize];
-  bool success_arr[mica::kMaxBatchSize];
-  clock_gettime(CLOCK_REALTIME, &start);
-
-  size_t num_success = 0;
-  for (size_t i = 1; i <= kNumIters; i += batch_size) {
-    for (size_t j = 0; j < batch_size; j++) {
-      is_set_arr[j] = false;
-      key_arr[j].key_frag[0] = fastrange64(pcg(), max_key);
-    }
-
-    hashmap->batch_op_drain(is_set_arr, key_arr, val_arr, success_arr,
-                            batch_size);
-
-    for (size_t j = 0; j < batch_size; j++) num_success += success_arr[j];
-  }
-
-  double seconds = sec_since(start);
-  double tput = kNumIters / (seconds * 1000000);
-  return tput;
-}
-
 size_t populate(HashMap *hashmap) {
   bool is_set_arr[mica::kMaxBatchSize];
   Key key_arr[mica::kMaxBatchSize];
@@ -97,7 +68,9 @@ size_t populate(HashMap *hashmap) {
   return FLAGS_table_key_capacity;  // All keys were added
 }
 
-double batch_sets(HashMap *hashmap, size_t max_key, size_t batch_size) {
+enum class Workload { kGets, kSets, k5050 };
+double batch_exp(HashMap *hashmap, size_t max_key, size_t batch_size,
+                 Workload workload) {
   pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
   constexpr size_t kNumIters = MB(1);
 
@@ -111,9 +84,14 @@ double batch_sets(HashMap *hashmap, size_t max_key, size_t batch_size) {
   size_t num_success = 0;
   for (size_t i = 1; i <= kNumIters; i += batch_size) {
     for (size_t j = 0; j < batch_size; j++) {
-      is_set_arr[j] = true;
       key_arr[j].key_frag[0] = fastrange64(pcg(), max_key);
       val_arr[j].val_frag[0] = key_arr[j].key_frag[0];
+
+      switch (workload) {
+        case Workload::kGets: is_set_arr[j] = false; break;
+        case Workload::kSets: is_set_arr[j] = true; break;
+        case Workload::k5050: is_set_arr[j] = pcg() % 2 == 0; break;
+      }
     }
 
     hashmap->batch_op_drain(is_set_arr, key_arr, val_arr, success_arr,
@@ -145,8 +123,12 @@ void thread_func(size_t thread_id) {
   std::string bench = FLAGS_benchmark;
   for (size_t i = 0; i < 100; i++) {
     double tput;
-    if (bench == "set") tput = batch_sets(hashmap, max_key, FLAGS_batch_size);
-    if (bench == "get") tput = batch_gets(hashmap, max_key, FLAGS_batch_size);
+    Workload workload;
+    if (bench == "set") workload = Workload::kSets;
+    if (bench == "get") workload = Workload::kGets;
+    if (bench == "5050") workload = Workload::k5050;
+
+    tput = batch_exp(hashmap, max_key, FLAGS_batch_size, workload);
 
     printf("thread %zu, iter %zu: tput = %.2f\n", thread_id, i, tput);
     tput_vec.push_back(tput);
@@ -162,14 +144,13 @@ void thread_func(size_t thread_id) {
   delete hashmap;
 }
 
-void sweep_do_one(std::string bench, HashMap *hashmap, size_t max_key,
-                  size_t batch_size) {
+void sweep_do_one(HashMap *hashmap, size_t max_key, size_t batch_size,
+                  Workload workload) {
   std::vector<double> tput_vec;
 
   for (size_t i = 0; i < 10; i++) {
     double tput;
-    if (bench == "set") tput = batch_sets(hashmap, max_key, batch_size);
-    if (bench == "get") tput = batch_gets(hashmap, max_key, batch_size);
+    tput = batch_exp(hashmap, max_key, batch_size, workload);
     tput_vec.push_back(tput);
   }
 
@@ -177,7 +158,7 @@ void sweep_do_one(std::string bench, HashMap *hashmap, size_t max_key,
       std::accumulate(tput_vec.begin(), tput_vec.end(), 0.0) / tput_vec.size();
   double _stddev = stddev(tput_vec);
 
-  printf("Tput (M/s) = %.2f avg, %.2f stddev\n", avg_tput, _stddev);
+  printf("  Tput (M/s) = %.2f avg, %.2f stddev\n", avg_tput, _stddev);
 }
 
 // Measure the effectiveness of optimizations with one thread
@@ -190,40 +171,52 @@ void sweep_optimizations() {
 
   size_t max_key = populate(hashmap);
 
-  std::vector<size_t> batch_size_vec = {1, 8, 16};
+  std::vector<size_t> batch_size_vec = {1, 4, 8, 16};
 
-  // GET basic
+  // GET batch sizes
   for (auto &batch_size : batch_size_vec) {
     printf("get. Batch size %zu\n", batch_size);
-    sweep_do_one("get", hashmap, max_key, batch_size);
+    sweep_do_one(hashmap, max_key, batch_size, Workload::kGets);
   }
 
-  // GET optimizations
-  hashmap->opts.prefetch = false;
-  printf("get. Batch size 16, no prefetch.\n");
-  sweep_do_one("get", hashmap, max_key, 16);
-  hashmap->opts.reset();
-
-  // SET basic
+  // SET batch sizes
   for (auto &batch_size : batch_size_vec) {
     printf("set. Batch size %zu\n", batch_size);
-    sweep_do_one("set", hashmap, max_key, batch_size);
+    sweep_do_one(hashmap, max_key, batch_size, Workload::kSets);
   }
 
-  // SET optimizations
+  // 50/50 batch sizes
+  for (auto &batch_size : batch_size_vec) {
+    printf("50/50. Batch size %zu\n", batch_size);
+    sweep_do_one(hashmap, max_key, batch_size, Workload::k5050);
+  }
+
+  // Optimizations for GETs
+  hashmap->opts.prefetch = false;
+  printf("get. Batch size 16, no prefetch.\n");
+  sweep_do_one(hashmap, max_key, 16, Workload::kGets);
+  hashmap->opts.reset();
+
+  // Optimizations for SETs, and 50/50
   hashmap->opts.redo_batch = false;
   printf("set. Batch size 16, only redo batch disabled\n");
-  sweep_do_one("set", hashmap, max_key, 16);
+  sweep_do_one(hashmap, max_key, 16, Workload::kSets);
+  printf("50/50. Batch size 16, only redo batch disabled\n");
+  sweep_do_one(hashmap, max_key, 16, Workload::k5050);
   hashmap->opts.reset();
 
   hashmap->opts.prefetch = false;
   printf("set. Batch size 16, only prefetch disabled.\n");
-  sweep_do_one("set", hashmap, max_key, 16);
+  sweep_do_one(hashmap, max_key, 16, Workload::kSets);
+  printf("50/50. Batch size 16, only prefetch disabled\n");
+  sweep_do_one(hashmap, max_key, 16, Workload::k5050);
   hashmap->opts.reset();
 
   hashmap->opts.nodrain_slot = false;
   printf("set. Batch size 16, only nodrain_slot disabled.\n");
-  sweep_do_one("set", hashmap, max_key, 16);
+  sweep_do_one(hashmap, max_key, 16, Workload::kSets);
+  printf("50/50. Batch size 16, only nodrain_slot disabled.\n");
+  sweep_do_one(hashmap, max_key, 16, Workload::k5050);
   hashmap->opts.reset();
 
   delete hashmap;
@@ -231,7 +224,7 @@ void sweep_optimizations() {
 
 int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  // sweep_optimizations();
+  sweep_optimizations();
 
   std::vector<std::thread> threads(FLAGS_num_threads);
 
