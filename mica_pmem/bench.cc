@@ -1,5 +1,7 @@
 #include <gflags/gflags.h>
+#include <condition_variable>
 #include <map>
+#include <mutex>
 #include <pcg/pcg_random.hpp>
 #include "mica_pmem.h"
 
@@ -25,6 +27,27 @@ class Value {
   size_t val_frag[8];
   Value() { memset(val_frag, 0, sizeof(Value)); }
 };
+
+// Used for threads to wait to begin work
+// https://stackoverflow.com/questions/24465533/implementing-boostbarrier-in-c11
+class Barrier {
+ private:
+  std::mutex mutex;
+  std::condition_variable cv;
+  std::size_t count;
+
+ public:
+  explicit Barrier(std::size_t count) : count{count} {}
+  void wait() {
+    std::unique_lock<std::mutex> lock{mutex};
+    if (--count == 0) {
+      cv.notify_all();
+    } else {
+      cv.wait(lock, [this] { return count == 0; });
+    }
+  }
+};
+Barrier *barrier;
 
 /// Given a random number \p rand, return a random number
 static inline uint64_t fastrange64(uint64_t rand, uint64_t n) {
@@ -119,17 +142,17 @@ void thread_func(size_t thread_id) {
   size_t max_key = populate(hashmap);
 
   std::vector<double> tput_vec;
+  Workload workload;
+  if (FLAGS_benchmark == "set") workload = Workload::kSets;
+  if (FLAGS_benchmark == "get") workload = Workload::kGets;
+  if (FLAGS_benchmark == "5050") workload = Workload::k5050;
 
-  std::string bench = FLAGS_benchmark;
-  for (size_t i = 0; i < 100; i++) {
-    double tput;
-    Workload workload;
-    if (bench == "set") workload = Workload::kSets;
-    if (bench == "get") workload = Workload::kGets;
-    if (bench == "5050") workload = Workload::k5050;
+  printf("thread %zu, done populating. waiting for others.\n", thread_id);
+  barrier->wait();
+  printf("thread %zu, starting work.\n", thread_id);
 
-    tput = batch_exp(hashmap, max_key, FLAGS_batch_size, workload);
-
+  for (size_t i = 0; i < 10; i++) {
+    double tput = batch_exp(hashmap, max_key, FLAGS_batch_size, workload);
     printf("thread %zu, iter %zu: tput = %.2f\n", thread_id, i, tput);
     tput_vec.push_back(tput);
   }
@@ -226,6 +249,7 @@ int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   sweep_optimizations();
 
+  barrier = new Barrier(FLAGS_num_threads);
   std::vector<std::thread> threads(FLAGS_num_threads);
 
   for (size_t i = 0; i < FLAGS_num_threads; i++) {
@@ -237,4 +261,6 @@ int main(int argc, char **argv) {
   for (size_t i = 0; i < FLAGS_num_threads; i++) {
     threads[i].join();
   }
+
+  delete barrier;
 }
