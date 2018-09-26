@@ -14,11 +14,13 @@ static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 8;
 static constexpr size_t kNumaNode = 0;
 
 static constexpr bool kUsePmem = true;
-static constexpr bool kEnablePrefetch = true;
 
-// Pmem-only settings
-static constexpr bool kEnableRedoLogging = true;
+// Optimization options
+static constexpr bool kEnablePrefetch = true;
 static constexpr bool kEnableRedoBatch = true;
+
+// If enabled, the write to the table on SET uses _persist instead of _nodrain
+static constexpr bool kPersistTableOnSet = false;
 
 // These functions allow switching easily between pmem and DRAM
 void maybe_pmem_drain() {
@@ -246,7 +248,7 @@ class HashMap {
       keyhash_arr[i] = get_hash(key_arr[i]);
       prefetch(keyhash_arr[i]);
 
-      if (kUsePmem && kEnableRedoLogging && is_set[i]) {
+      if (kUsePmem && is_set[i]) {
         all_gets = false;
         RedoLogEntry v_rle(cur_sequence_number, key_arr[i], value_arr[i]);
 
@@ -269,7 +271,7 @@ class HashMap {
       }
     }
 
-    if (kUsePmem && kEnableRedoLogging && kEnableRedoBatch && !all_gets) {
+    if (kUsePmem && kEnableRedoBatch && !all_gets) {
       // This is needed only if redo log batching is enabled
       maybe_pmem_drain();  // Block until the redo log entries are persistent
       maybe_pmem_memcpy_persist(&redo_log->committed_seq_num,
@@ -377,8 +379,13 @@ class HashMap {
     // printf("  set key %zu, value %zu success. bucket %p, index %zu\n",
     //      key, value, located_bucket, item_index);
     Slot s(key, value);
-    maybe_pmem_memcpy_nodrain(&located_bucket->slot_arr[item_index], &s,
-                              sizeof(s));
+    if (kPersistTableOnSet) {
+      maybe_pmem_memcpy_persist(&located_bucket->slot_arr[item_index], &s,
+                                sizeof(s));
+    } else {
+      maybe_pmem_memcpy_nodrain(&located_bucket->slot_arr[item_index], &s,
+                                sizeof(s));
+    }
 
     return true;
   }
