@@ -3,7 +3,7 @@
 #include <pcg/pcg_random.hpp>
 #include "mica_pmem.h"
 
-DEFINE_uint64(table_key_capacity, MB(1), "Number of keys in table");
+DEFINE_uint64(table_key_capacity, MB(1), "Number of keys in table per thread");
 DEFINE_uint64(batch_size, mica::kMaxBatchSize, "Batch size");
 DEFINE_string(benchmark, "get", "Benchmark to run");
 DEFINE_uint64(num_threads, 1, "Number of threads");
