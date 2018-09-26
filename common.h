@@ -275,3 +275,15 @@ static void bind_to_core(std::thread &thread, size_t numa_node,
                                   &cpuset);
   rt_assert(rc == 0, "Error setting thread affinity");
 }
+
+/// Compute the standard deviation of a vector
+static double stddev(std::vector<double> v) {
+  if (unlikely(v.empty())) return 0;
+  double sum = std::accumulate(v.begin(), v.end(), 0.0);
+  double mean = sum / v.size();
+  double sq_sum = std::inner_product(v.begin(), v.end(), v.begin(), 0.0);
+  double var = sq_sum / v.size() - (mean * mean);
+  if (unlikely(var < 0)) return 0.0;  // This can happen when var ~ 0
+
+  return std::sqrt(var);
+}

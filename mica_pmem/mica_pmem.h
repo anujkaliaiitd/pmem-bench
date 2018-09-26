@@ -120,7 +120,7 @@ class HashMap {
     rt_assert(num_requested_keys >= kSlotsPerBucket);  // At least one bucket
     rt_assert(file_offset % 256 == 0);                 // Aligned to pmem block
 
-    printf("Space required = %.1f GB, key capacity = %.1f M\n",
+    printf("Space required = %.4f GB, key capacity = %.4f M\n",
            reqd_space * 1.0 / GB(1), get_key_capacity() / 1000000.0);
 
     if (kUsePmem) {
@@ -205,9 +205,9 @@ class HashMap {
     size_t bucket_index = key_hash & (num_regular_buckets - 1);
     const Bucket* bucket = &buckets_[bucket_index];
 
+    // Prefetching two cache lines seems to works best
     __builtin_prefetch(bucket, 0, 0);
     __builtin_prefetch(reinterpret_cast<const char*>(bucket) + 64, 0, 0);
-    __builtin_prefetch(reinterpret_cast<const char*>(bucket) + 128, 0, 0);
   }
 
   // Find a bucket (\p located_bucket) and slot index (return value) in the
