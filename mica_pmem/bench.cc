@@ -57,7 +57,7 @@ static inline uint64_t fastrange64(uint64_t rand, uint64_t n) {
 
 typedef mica::HashMap<Key, Value> HashMap;
 
-size_t populate(HashMap *hashmap) {
+size_t populate(HashMap *hashmap, size_t thread_id) {
   bool is_set_arr[mica::kMaxBatchSize];
   Key key_arr[mica::kMaxBatchSize];
   Value val_arr[mica::kMaxBatchSize];
@@ -65,7 +65,7 @@ size_t populate(HashMap *hashmap) {
 
   size_t num_success = 0;
 
-  size_t progress_console_lim = FLAGS_table_key_capacity / 20;
+  size_t progress_console_lim = FLAGS_table_key_capacity / 10;
 
   for (size_t i = 1; i <= FLAGS_table_key_capacity; i += mica::kMaxBatchSize) {
     for (size_t j = 0; j < mica::kMaxBatchSize; j++) {
@@ -78,8 +78,9 @@ size_t populate(HashMap *hashmap) {
                             mica::kMaxBatchSize);
 
     if (i >= progress_console_lim) {
-      printf("%.2f percent done\n", i * 1.0 / FLAGS_table_key_capacity);
-      progress_console_lim += FLAGS_table_key_capacity / 20;
+      printf("thread %zu: %.2f percent done\n", thread_id,
+             i * 1.0 / FLAGS_table_key_capacity);
+      progress_console_lim += FLAGS_table_key_capacity / 10;
     }
 
     for (size_t j = 0; j < mica::kMaxBatchSize; j++) {
@@ -139,7 +140,7 @@ void thread_func(size_t thread_id) {
   printf("thread %zu: Populating hashmap. Expected time = %.1f seconds\n",
          thread_id, FLAGS_table_key_capacity / (4.0 * 1000000));  // 4 M/s
 
-  size_t max_key = populate(hashmap);
+  size_t max_key = populate(hashmap, thread_id);
 
   std::vector<double> tput_vec;
   Workload workload;
@@ -161,8 +162,8 @@ void thread_func(size_t thread_id) {
       std::accumulate(tput_vec.begin(), tput_vec.end(), 0.0) / tput_vec.size();
   double _stddev = stddev(tput_vec);
 
-  printf("thread %zu final: Tput (M/s) = %.2f avg, %.2f stddev\n", thread_id,
-         avg_tput, _stddev);
+  printf("thread %zu of %zu final M/s: %.2f avg, %.2f stddev\n", thread_id,
+         FLAGS_num_threads, avg_tput, _stddev);
 
   delete hashmap;
 }
@@ -192,7 +193,7 @@ void sweep_optimizations() {
   printf("Populating hashmap. Expected time = %.1f seconds\n",
          FLAGS_table_key_capacity / (4.0 * 1000000));  // 4 M/s
 
-  size_t max_key = populate(hashmap);
+  size_t max_key = populate(hashmap, 0 /* thread_id */);
 
   std::vector<size_t> batch_size_vec = {1, 4, 8, 16};
 
@@ -247,7 +248,8 @@ void sweep_optimizations() {
 
 int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  sweep_optimizations();
+  // sweep_optimizations();
+  // exit(0);
 
   barrier = new Barrier(FLAGS_num_threads);
   std::vector<std::thread> threads(FLAGS_num_threads);

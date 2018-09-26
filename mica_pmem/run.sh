@@ -4,7 +4,9 @@ benchmark=get
 
 keys_total=1000000000
 
-for num_threads in 1; do
+rm -rf /tmp/mica_bench*
+
+for num_threads in 1 2 4 8 16 24; do
   keys_per_thread=`expr $keys_total / $num_threads`
 
   # Non-GDB mode
