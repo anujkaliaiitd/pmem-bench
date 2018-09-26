@@ -18,7 +18,7 @@ static constexpr bool kEnablePrefetch = true;
 static constexpr bool kEnableRedoLogging = true;
 
 // Redo logging enabled => use pmem
-static_assert(!kUsePmem || kEnableRedoLogging, "");
+static_assert(!kEnableRedoLogging || kUsePmem, "");
 
 // These functions allow switching easily between pmem and DRAM
 void maybe_pmem_drain() {
@@ -351,7 +351,6 @@ class HashMap {
 
     // printf("set key %zu, value %zu\n");
 
-    // XXX Persist
     size_t bucket_index = key_hash & (num_regular_buckets - 1);
     Bucket* bucket = &buckets_[bucket_index];
     Bucket* located_bucket;
@@ -369,15 +368,8 @@ class HashMap {
     // printf("  set key %zu, value %zu success. bucket %p, index %zu\n",
     //      key, value, located_bucket, item_index);
     Slot s(key, value);
-
-    if (kEnableRedoLogging) {
-      maybe_pmem_memcpy_nodrain(&located_bucket->slot_arr[item_index], &s,
-                                sizeof(s));
-    } else {
-      // For the DRAM case, this can be a bit faster
-      maybe_pmem_memcpy_persist(&located_bucket->slot_arr[item_index], &s,
-                                sizeof(s));
-    }
+    maybe_pmem_memcpy_nodrain(&located_bucket->slot_arr[item_index], &s,
+                              sizeof(s));
 
     return true;
   }
