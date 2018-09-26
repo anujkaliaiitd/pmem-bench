@@ -4,7 +4,6 @@
 // Benchmark impl
 #include "rand_read_latency.h"
 #include "rand_write_latency.h"
-#include "seq_read_latency.h"
 #include "seq_write_latency.h"
 #include "seq_write_tput.h"
 
@@ -64,28 +63,6 @@ void bench_rand_write_tput(uint8_t *pbuf, size_t thread_id) {
     double cacheline_rate = kNumIters / tot_sec;
     printf("Thread %zu: random write tput = %.2f M/sec, %.2f GB/s\n", thread_id,
            cacheline_rate / 1000000, (cacheline_rate * 64) / 1000000000);
-  }
-}
-
-/// Random write latency
-void bench_rand_write_lat(uint8_t *pbuf, size_t thread_id) {
-  static constexpr size_t kNumIters = MB(2);
-  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
-
-  // Write to non-overlapping addresses
-  const size_t bytes_per_thread = kPmemFileSize / FLAGS_num_threads;
-  const size_t base_addr = thread_id * bytes_per_thread;
-
-  while (true) {
-    size_t ticks_sum = 0;
-    for (size_t i = 0; i < kNumIters; i++) {
-      size_t ticks_st = rdtsc();
-      pmem_memset_persist(&pbuf[base_addr + (pcg() % bytes_per_thread)], i, 64);
-      ticks_sum += (rdtscp() - ticks_st);
-    }
-
-    printf("Thread %zu: Latency of persistent rand writes = %.2f ns.\n",
-           thread_id, ticks_sum / (kNumIters * freq_ghz));
   }
 }
 
@@ -200,12 +177,6 @@ int main(int argc, char **argv) {
   if (bench_func == "bench_rand_read_latency") {
     printf("Random read latency. One thread only!\n");
     bench_rand_read_latency(pbuf);
-  }
-
-  // Sequential read latency
-  if (bench_func == "bench_seq_read_latency") {
-    printf("Sequential read latency. One thread only!\n");
-    bench_seq_read_latency(pbuf);
   }
 
   pmem_unmap(pbuf, mapped_len);

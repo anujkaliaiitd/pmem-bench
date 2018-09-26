@@ -254,8 +254,8 @@ int main(int argc, char **argv) {
   barrier = new Barrier(FLAGS_num_threads);
   std::vector<std::thread> threads(FLAGS_num_threads);
 
+  printf("Launching %zu threads\n", FLAGS_num_threads);
   for (size_t i = 0; i < FLAGS_num_threads; i++) {
-    printf("Launching %zu threads\n", i);
     threads[i] = std::thread(thread_func, i);
     bind_to_core(threads[i], kNumaNode, i);
   }

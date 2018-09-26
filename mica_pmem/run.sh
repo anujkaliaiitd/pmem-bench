@@ -1,6 +1,5 @@
-batch_size=8
-num_threads=8
-benchmark=get
+batch_size=16
+benchmark=5050
 
 keys_total=1000000000
 
@@ -17,9 +16,10 @@ for num_threads in 1 2 4 8 16 24; do
       --benchmark $benchmark \
       --num_threads $num_threads
   fi
+  printf "\n\n\n\n"
 done
 
-
+num_threads=1
 # GDB mode
 if [ "$#" -eq 1 ]; then
   echo "do.sh: Launching process with GDB"
