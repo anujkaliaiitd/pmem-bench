@@ -5,7 +5,7 @@
 // Other pmem benchmarks use the first terabyte on intel-1. Beyond 1 TB, we
 // save the hash map so that we don't have to populate it repeatedly.
 static constexpr size_t kDefaultFileOffset = GB(1024);
-static constexpr size_t kTableKeyCapacity = MB(512);
+static constexpr size_t kTableKeyCapacity = MB(128);
 
 // MICA's ``small'' workload: 16-byte keys and 64-byte values
 class Key {
@@ -57,7 +57,7 @@ void batch_gets(HashMap *hashmap, size_t max_key, size_t batch_size) {
   }
 
   double seconds = sec_since(start);
-  printf("Batched GET perf (%zu per batch ) = %.2f M/s. Success rate = %.4f\n",
+  printf("Batched GET perf (%zu per batch) = %.2f M/s. Success rate = %.4f\n",
          batch_size, kNumIters / (seconds * 1000000),
          num_success * 1.0 / kNumIters);
 }
@@ -125,7 +125,7 @@ void batch_sets(HashMap *hashmap, size_t max_key, size_t batch_size) {
   }
 
   double seconds = sec_since(start);
-  printf("Batched SET perf (%zu per batch ) = %.2f M/s. Success rate = %.4f\n",
+  printf("Batched SET perf (%zu per batch) = %.2f M/s. Success rate = %.4f\n",
          batch_size, kNumIters / (seconds * 1000000),
          num_success * 1.0 / kNumIters);
 }

@@ -13,9 +13,9 @@ static constexpr size_t kMaxBatchSize = 16;
 static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 8;
 static constexpr size_t kNumaNode = 0;
 
-static constexpr bool kUsePmem = false;
+static constexpr bool kUsePmem = true;
 static constexpr bool kEnablePrefetch = true;
-static constexpr bool kEnableRedoLogging = false;
+static constexpr bool kEnableRedoLogging = true;
 
 // Redo logging enabled => use pmem
 static_assert(!kUsePmem || kEnableRedoLogging, "");
