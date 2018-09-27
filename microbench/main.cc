@@ -3,36 +3,11 @@
 
 // Benchmark impl
 #include "rand_read_latency.h"
+#include "rand_read_tput.h"
 #include "rand_write_latency.h"
 #include "rand_write_tput.h"
 #include "seq_write_latency.h"
 #include "seq_write_tput.h"
-
-/// Random read throughput
-void bench_rand_read_tput(uint8_t *pbuf, size_t thread_id) {
-  static constexpr size_t kBatchSize = 10;
-  static constexpr size_t kNumIters = MB(4);
-
-  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
-  struct timespec start;
-  size_t sum = 0;
-
-  while (true) {
-    clock_gettime(CLOCK_REALTIME, &start);
-
-    for (size_t i = 0; i < kNumIters / kBatchSize; i++) {
-      size_t offset[kBatchSize];
-      for (size_t j = 0; j < kBatchSize; j++) {
-        offset[j] = pcg() % kPmemFileSize;
-      }
-      for (size_t j = 0; j < kBatchSize; j++) sum += pbuf[offset[j]];
-    }
-
-    double tot_sec = sec_since(start);
-    printf("Thread %zu: random read tput = %.2f M/sec. Sum = %zu\n", thread_id,
-           kNumIters / (tot_sec * 1000000), sum);
-  }
-}
 
 // Write to the whole file to "map it in", whatever that means
 void map_in_file_whole(uint8_t *pbuf) {
@@ -99,6 +74,7 @@ int main(int argc, char **argv) {
   bench_func = "bench_seq_read_latency";
   bench_func = "bench_rand_write_latency";
   bench_func = "bench_rand_write_tput";
+  bench_func = "bench_rand_read_tput";
 
   // Sequential write throughput
   if (bench_func == "bench_seq_write_tput") {
@@ -162,6 +138,27 @@ int main(int argc, char **argv) {
         for (size_t i = 0; i < num_threads; i++) {
           threads[i] =
               std::thread(bench_rand_write_tput, pbuf, i, copy_sz, num_threads);
+        }
+
+        for (size_t i = 0; i < num_threads; i++) threads[i].join();
+      }
+    }
+  }
+
+  // Random read throughput
+  if (bench_func == "bench_rand_read_tput") {
+    std::vector<size_t> thread_count = {1, 2, 4, 8, 16, 24, 48};
+    std::vector<size_t> copy_sz_vec = {64, 256, 512, 1024};
+
+    for (size_t copy_sz : copy_sz_vec) {
+      for (size_t num_threads : thread_count) {
+        printf("Rand read tput with %zu threads, copy_sz %zu\n", num_threads,
+               copy_sz);
+        std::vector<std::thread> threads(num_threads);
+
+        for (size_t i = 0; i < num_threads; i++) {
+          threads[i] =
+              std::thread(bench_rand_read_tput, pbuf, i, copy_sz, num_threads);
         }
 
         for (size_t i = 0; i < num_threads; i++) threads[i].join();
