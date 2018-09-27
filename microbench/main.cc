@@ -4,6 +4,7 @@
 // Benchmark impl
 #include "rand_read_latency.h"
 #include "rand_write_latency.h"
+#include "rand_write_tput.h"
 #include "seq_write_latency.h"
 #include "seq_write_tput.h"
 
@@ -30,39 +31,6 @@ void bench_rand_read_tput(uint8_t *pbuf, size_t thread_id) {
     double tot_sec = sec_since(start);
     printf("Thread %zu: random read tput = %.2f M/sec. Sum = %zu\n", thread_id,
            kNumIters / (tot_sec * 1000000), sum);
-  }
-}
-
-/// Random write throughput
-void bench_rand_write_tput(uint8_t *pbuf, size_t thread_id) {
-  static constexpr size_t kBatchSize = 10;
-  static constexpr size_t kNumIters = MB(4);
-
-  // Write to non-overlapping addresses
-  const size_t bytes_per_thread = kPmemFileSize / FLAGS_num_threads;
-  const size_t base_addr = thread_id * bytes_per_thread;
-
-  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
-  struct timespec start;
-
-  while (true) {
-    clock_gettime(CLOCK_REALTIME, &start);
-
-    for (size_t i = 0; i < kNumIters / kBatchSize; i++) {
-      size_t offset[kBatchSize];
-      for (size_t j = 0; j < kBatchSize; j++) {
-        offset[j] = base_addr + (pcg() % bytes_per_thread);
-        offset[j] = align64(offset[j]);
-        pmem_memset_nodrain(&pbuf[offset[j]], i + j, 64);
-      }
-
-      pmem_drain();
-    }
-
-    double tot_sec = sec_since(start);
-    double cacheline_rate = kNumIters / tot_sec;
-    printf("Thread %zu: random write tput = %.2f M/sec, %.2f GB/s\n", thread_id,
-           cacheline_rate / 1000000, (cacheline_rate * 64) / 1000000000);
   }
 }
 
@@ -130,6 +98,7 @@ int main(int argc, char **argv) {
   bench_func = "bench_seq_write_latency";
   bench_func = "bench_rand_write_latency";
   bench_func = "bench_seq_read_latency";
+  bench_func = "bench_rand_write_tput";
 
   // Sequential write throughput
   if (bench_func == "bench_seq_write_tput") {
@@ -177,6 +146,27 @@ int main(int argc, char **argv) {
   if (bench_func == "bench_rand_read_latency") {
     printf("Random read latency. One thread only!\n");
     bench_rand_read_latency(pbuf);
+  }
+
+  // Random write tput
+  if (bench_func == "bench_rand_write_tput") {
+    std::vector<size_t> thread_count = {1, 2, 4, 8, 16, 24};
+    std::vector<size_t> copy_sz_vec = {64, 256};
+
+    for (size_t num_threads : thread_count) {
+      for (size_t copy_sz : copy_sz_vec) {
+        printf("Rand write tput with %zu threads, copy_sz %zu\n", num_threads,
+               copy_sz);
+        std::vector<std::thread> threads(num_threads);
+
+        for (size_t i = 0; i < num_threads; i++) {
+          threads[i] =
+              std::thread(bench_rand_write_tput, pbuf, i, copy_sz, num_threads);
+        }
+
+        for (size_t i = 0; i < num_threads; i++) threads[i].join();
+      }
+    }
   }
 
   pmem_unmap(pbuf, mapped_len);
