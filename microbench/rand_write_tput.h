@@ -3,7 +3,7 @@
 
 void bench_rand_write_tput(uint8_t *pbuf, size_t thread_id, size_t copy_sz,
                            size_t num_threads) {
-  static constexpr size_t kBatchSize = 1;
+  static constexpr size_t kBatchSize = 8;
   static constexpr size_t kNumIters = MB(4);
 
   // Write to non-overlapping addresses
@@ -30,9 +30,8 @@ void bench_rand_write_tput(uint8_t *pbuf, size_t thread_id, size_t copy_sz,
         }
         pmem_memcpy_nodrain(&pbuf[offset[j]], copy_arr, copy_sz);
       }
+      pmem_drain();
     }
-
-    pmem_drain();
 
     double tot_sec = sec_since(start);
     double rate = kNumIters / tot_sec;

@@ -96,8 +96,8 @@ int main(int argc, char **argv) {
   bench_func = "bench_seq_write_tput";
   bench_func = "bench_seq_write_tput";
   bench_func = "bench_seq_write_latency";
-  bench_func = "bench_rand_write_latency";
   bench_func = "bench_seq_read_latency";
+  bench_func = "bench_rand_write_latency";
   bench_func = "bench_rand_write_tput";
 
   // Sequential write throughput
@@ -153,8 +153,8 @@ int main(int argc, char **argv) {
     std::vector<size_t> thread_count = {1, 2, 4, 8, 16, 24};
     std::vector<size_t> copy_sz_vec = {64, 256};
 
-    for (size_t num_threads : thread_count) {
-      for (size_t copy_sz : copy_sz_vec) {
+    for (size_t copy_sz : copy_sz_vec) {
+      for (size_t num_threads : thread_count) {
         printf("Rand write tput with %zu threads, copy_sz %zu\n", num_threads,
                copy_sz);
         std::vector<std::thread> threads(num_threads);
