@@ -3,10 +3,11 @@
 #include <map>
 #include <mutex>
 #include <pcg/pcg_random.hpp>
+#include "../common.h"
 #include "mica_pmem.h"
 
 DEFINE_uint64(table_key_capacity, MB(1), "Number of keys in table per thread");
-DEFINE_uint64(batch_size, mica::kMaxBatchSize, "Batch size");
+DEFINE_uint64(batch_size, pmica::kMaxBatchSize, "Batch size");
 DEFINE_string(benchmark, "get", "Benchmark to run");
 DEFINE_uint64(num_threads, 1, "Number of threads");
 
@@ -55,27 +56,27 @@ static inline uint64_t fastrange64(uint64_t rand, uint64_t n) {
       static_cast<__uint128_t>(rand) * static_cast<__uint128_t>(n) >> 64);
 }
 
-typedef mica::HashMap<Key, Value> HashMap;
+typedef pmica::HashMap<Key, Value> HashMap;
 
 size_t populate(HashMap *hashmap, size_t thread_id) {
-  bool is_set_arr[mica::kMaxBatchSize];
-  Key key_arr[mica::kMaxBatchSize];
-  Value val_arr[mica::kMaxBatchSize];
-  bool success_arr[mica::kMaxBatchSize];
+  bool is_set_arr[pmica::kMaxBatchSize];
+  Key key_arr[pmica::kMaxBatchSize];
+  Value val_arr[pmica::kMaxBatchSize];
+  bool success_arr[pmica::kMaxBatchSize];
 
   size_t num_success = 0;
 
   size_t progress_console_lim = FLAGS_table_key_capacity / 10;
 
-  for (size_t i = 1; i <= FLAGS_table_key_capacity; i += mica::kMaxBatchSize) {
-    for (size_t j = 0; j < mica::kMaxBatchSize; j++) {
+  for (size_t i = 1; i <= FLAGS_table_key_capacity; i += pmica::kMaxBatchSize) {
+    for (size_t j = 0; j < pmica::kMaxBatchSize; j++) {
       is_set_arr[j] = true;
       key_arr[j].key_frag[0] = i + j;
       val_arr[j].val_frag[0] = i + j;
     }
 
     hashmap->batch_op_drain(is_set_arr, key_arr, val_arr, success_arr,
-                            mica::kMaxBatchSize);
+                            pmica::kMaxBatchSize);
 
     if (i >= progress_console_lim) {
       printf("thread %zu: %.2f percent done\n", thread_id,
@@ -83,7 +84,7 @@ size_t populate(HashMap *hashmap, size_t thread_id) {
       progress_console_lim += FLAGS_table_key_capacity / 10;
     }
 
-    for (size_t j = 0; j < mica::kMaxBatchSize; j++) {
+    for (size_t j = 0; j < pmica::kMaxBatchSize; j++) {
       num_success += success_arr[j];
       if (!success_arr[j]) return num_success;
     }
@@ -99,10 +100,10 @@ double batch_exp(HashMap *hashmap, size_t max_key, size_t batch_size,
   constexpr size_t kNumIters = MB(1);
 
   struct timespec start;
-  bool is_set_arr[mica::kMaxBatchSize];
-  Key key_arr[mica::kMaxBatchSize];
-  Value val_arr[mica::kMaxBatchSize];
-  bool success_arr[mica::kMaxBatchSize];
+  bool is_set_arr[pmica::kMaxBatchSize];
+  Key key_arr[pmica::kMaxBatchSize];
+  Value val_arr[pmica::kMaxBatchSize];
+  bool success_arr[pmica::kMaxBatchSize];
   clock_gettime(CLOCK_REALTIME, &start);
 
   size_t num_success = 0;
@@ -134,7 +135,7 @@ void thread_func(size_t thread_id) {
       HashMap::get_required_bytes(FLAGS_table_key_capacity, kDefaultOverhead);
   bytes_per_map = roundup<256>(bytes_per_map);
 
-  auto *hashmap = new HashMap("/dev/dax0.0", thread_id * bytes_per_map,
+  auto *hashmap = new HashMap("/dev/dax12.0", thread_id * bytes_per_map,
                               FLAGS_table_key_capacity, kDefaultOverhead);
 
   printf("thread %zu: Populating hashmap. Expected time = %.1f seconds\n",
@@ -236,10 +237,10 @@ void sweep_optimizations() {
   sweep_do_one(hashmap, max_key, 16, Workload::k5050);
   hashmap->opts.reset();
 
-  hashmap->opts.nodrain_slot = false;
-  printf("set. Batch size 16, only nodrain_slot disabled.\n");
+  hashmap->opts.async_drain = false;
+  printf("set. Batch size 16, only async slot drain disabled.\n");
   sweep_do_one(hashmap, max_key, 16, Workload::kSets);
-  printf("50/50. Batch size 16, only nodrain_slot disabled.\n");
+  printf("50/50. Batch size 16, only async slot drain disabled.\n");
   sweep_do_one(hashmap, max_key, 16, Workload::k5050);
   hashmap->opts.reset();
 

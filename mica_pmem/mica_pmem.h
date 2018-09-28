@@ -1,35 +1,51 @@
+/**
+ * @file mica-pmem.h
+ * @brief Simple MICA-style persistent KV store. Header-only, no dependencies.
+ * @author Anuj Kalia
+ */
 #pragma once
 
 #include <assert.h>
 #include <city.h>
 #include <libpmem.h>
-#include "../common.h"
-#include "huge_alloc.h"
+#include <stdexcept>
+#include <string>
+#include <vector>
 
-namespace mica {
+namespace pmica {
 
 static constexpr size_t kSlotsPerBucket = 8;
 static constexpr size_t kMaxBatchSize = 16;
 static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 8;
-static constexpr size_t kNumaNode = 0;
 
-static constexpr bool kUsePmem = true;
-
-// These functions allow switching easily between pmem and DRAM
-void maybe_pmem_drain() {
-  if (kUsePmem) pmem_drain();
+/// Check a condition at runtime. If the condition is false, throw exception.
+static inline void rt_assert(bool condition, std::string throw_str) {
+  if (!condition) throw std::runtime_error(throw_str);
 }
 
-void maybe_pmem_memcpy_persist(void* dest, const void* src, size_t len) {
-  kUsePmem ? pmem_memcpy_persist(dest, src, len) : memcpy(dest, src, len);
+// Aligns 64b input parameter to the next power of 2
+static uint64_t rte_align64pow2(uint64_t v) {
+  v--;
+  v |= v >> 1;
+  v |= v >> 2;
+  v |= v >> 4;
+  v |= v >> 8;
+  v |= v >> 16;
+  v |= v >> 32;
+
+  return v + 1;
 }
 
-void maybe_pmem_memcpy_nodrain(void* dest, const void* src, size_t len) {
-  kUsePmem ? pmem_memcpy_nodrain(dest, src, len) : memcpy(dest, src, len);
+template <typename T>
+static constexpr bool is_power_of_two(T x) {
+  return x && ((x & T(x - 1)) == 0);
 }
 
-void maybe_pmem_memset_persist(void* dest, int c, size_t len) {
-  kUsePmem ? pmem_memset_persist(dest, c, len) : memset(dest, c, len);
+template <uint64_t PowerOfTwoNumber, typename T>
+static constexpr T roundup(T x) {
+  static_assert(is_power_of_two(PowerOfTwoNumber),
+                "PowerOfTwoNumber must be a power of 2");
+  return ((x) + T(PowerOfTwoNumber - 1)) & (~T(PowerOfTwoNumber - 1));
 }
 
 template <typename Key, typename Value>
@@ -87,8 +103,8 @@ class HashMap {
       fprintf(stderr,
               "pmem file too small. %.2f GB required for hash table "
               "(%zu buckets, bucket size = %zu), but only %.2f GB available\n",
-              reqd_space * 1.0 / GB(1), num_total_buckets, sizeof(Bucket),
-              mapped_len * 1.0 / GB(1));
+              reqd_space * 1.0 / (1ull << 30), num_total_buckets,
+              sizeof(Bucket), mapped_len * 1.0 / (1ull << 30));
     }
     rt_assert(is_pmem == 1, "File is not pmem");
 
@@ -110,29 +126,22 @@ class HashMap {
         num_extra_buckets(num_regular_buckets * overhead_fraction),
         num_total_buckets(num_regular_buckets + num_extra_buckets),
         reqd_space(get_required_bytes(num_requested_keys, overhead_fraction)),
-        invalid_key(get_invalid_key()),
-        huge_alloc(kNumaNode) {
+        invalid_key(get_invalid_key()) {
     rt_assert(num_requested_keys >= kSlotsPerBucket, ">=1 buckets needed");
     rt_assert(file_offset % 256 == 0, "Unaligned file offset");
 
     printf("Space required = %.4f GB, key capacity = %.4f M\n",
-           reqd_space * 1.0 / GB(1), get_key_capacity() / 1000000.0);
+           reqd_space * 1.0 / (1ull << 30), get_key_capacity() / 1000000.0);
 
-    if (kUsePmem) {
-      maybe_pbuf = map_pbuf(mapped_len);
-    } else {
-      hugealloc::Buffer b = huge_alloc.alloc_raw(reqd_space);
-      rt_assert(b.buf != nullptr, "Failed to allocate memory");
-      maybe_pbuf = b.buf;  // hugealloc will free the allocation
-    }
+    pbuf = map_pbuf(mapped_len);
 
     // Set the committed seq num, and all redo log entry seq nums to zero.
-    redo_log = reinterpret_cast<RedoLog*>(maybe_pbuf);
-    maybe_pmem_memset_persist(redo_log, 0, sizeof(RedoLog));
+    redo_log = reinterpret_cast<RedoLog*>(pbuf);
+    pmem_memset_persist(redo_log, 0, sizeof(RedoLog));
 
     // Initialize buckets
     size_t bucket_offset = roundup<256>(sizeof(RedoLog));
-    buckets_ = reinterpret_cast<Bucket*>(&maybe_pbuf[bucket_offset]);
+    buckets_ = reinterpret_cast<Bucket*>(&pbuf[bucket_offset]);
 
     // extra_buckets_[0] is the actually the last regular bucket. extra_buckets_
     // is indexed starting from one, so the last regular bucket is never used
@@ -153,8 +162,7 @@ class HashMap {
   }
 
   ~HashMap() {
-    if (kUsePmem && maybe_pbuf != nullptr)
-      pmem_unmap(maybe_pbuf - file_offset, mapped_len);
+    if (pbuf != nullptr) pmem_unmap(pbuf - file_offset, mapped_len);
   }
 
   /// Return the total bytes required for a table with \p num_requested_keys
@@ -182,7 +190,8 @@ class HashMap {
 
   // Initialize the contents of both regular and extra buckets
   void reset() {
-    double GB_to_memset = num_total_buckets * sizeof(Bucket) * 1.0 / GB(1);
+    double GB_to_memset =
+        num_total_buckets * sizeof(Bucket) * 1.0 / (1ull << 30);
     printf("Resetting hash table. This might take a while (~ %.1f seconds)\n",
            GB_to_memset / 3.0);
 
@@ -190,8 +199,7 @@ class HashMap {
     //  * bucket.slot[i].key = invalid_key;
     //  * bucket.next_extra_bucket_idx = 0;
     // pmem_memset_persist() uses SIMD, so it's faster
-    maybe_pmem_memset_persist(&buckets_[0], 0,
-                              num_total_buckets * sizeof(Bucket));
+    pmem_memset_persist(&buckets_[0], 0, num_total_buckets * sizeof(Bucket));
   }
 
   void prefetch(uint64_t key_hash) const {
@@ -241,34 +249,34 @@ class HashMap {
       keyhash_arr[i] = get_hash(key_arr[i]);
       prefetch(keyhash_arr[i]);
 
-      if (kUsePmem && is_set[i]) {
+      if (is_set[i]) {
         all_gets = false;
         RedoLogEntry v_rle(cur_sequence_number, key_arr[i], value_arr[i]);
 
         // Drain all pending writes to the table when we reuse log entries
-        if (cur_sequence_number % kNumRedoLogEntries == 0) maybe_pmem_drain();
+        if (cur_sequence_number % kNumRedoLogEntries == 0) pmem_drain();
 
         RedoLogEntry& p_rle =
             redo_log->entries[cur_sequence_number % kNumRedoLogEntries];
 
         if (opts.redo_batch) {
           // We will write to the committed sequence number later
-          maybe_pmem_memcpy_nodrain(&p_rle, &v_rle, sizeof(v_rle));
+          pmem_memcpy_nodrain(&p_rle, &v_rle, sizeof(v_rle));
         } else {
-          maybe_pmem_memcpy_persist(&p_rle, &v_rle, sizeof(v_rle));
-          maybe_pmem_memcpy_persist(&redo_log->committed_seq_num,
-                                    &cur_sequence_number, sizeof(size_t));
+          pmem_memcpy_persist(&p_rle, &v_rle, sizeof(v_rle));
+          pmem_memcpy_persist(&redo_log->committed_seq_num,
+                              &cur_sequence_number, sizeof(size_t));
         }
 
         cur_sequence_number++;  // Just the in-memory copy
       }
     }
 
-    if (kUsePmem && opts.redo_batch && !all_gets) {
+    if (opts.redo_batch && !all_gets) {
       // This is needed only if redo log batching is enabled
-      maybe_pmem_drain();  // Block until the redo log entries are persistent
-      maybe_pmem_memcpy_persist(&redo_log->committed_seq_num,
-                                &cur_sequence_number, sizeof(size_t));
+      pmem_drain();  // Block until the redo log entries are persistent
+      pmem_memcpy_persist(&redo_log->committed_seq_num, &cur_sequence_number,
+                          sizeof(size_t));
     }
 
     for (size_t i = 0; i < n; i++) {
@@ -309,8 +317,8 @@ class HashMap {
     extra_bucket_free_list.pop_back();
 
     // This is an eight-byte operation, so no need in redo log
-    maybe_pmem_memcpy_persist(&bucket->next_extra_bucket_idx,
-                              &extra_bucket_index, sizeof(extra_bucket_index));
+    pmem_memcpy_persist(&bucket->next_extra_bucket_idx, &extra_bucket_index,
+                        sizeof(extra_bucket_index));
     return true;
   }
 
@@ -372,12 +380,10 @@ class HashMap {
     // printf("  set key %zu, value %zu success. bucket %p, index %zu\n",
     //      key, value, located_bucket, item_index);
     Slot s(key, value);
-    if (opts.nodrain_slot) {
-      maybe_pmem_memcpy_nodrain(&located_bucket->slot_arr[item_index], &s,
-                                sizeof(s));
+    if (opts.async_drain) {
+      pmem_memcpy_nodrain(&located_bucket->slot_arr[item_index], &s, sizeof(s));
     } else {
-      maybe_pmem_memcpy_persist(&located_bucket->slot_arr[item_index], &s,
-                                sizeof(s));
+      pmem_memcpy_persist(&located_bucket->slot_arr[item_index], &s, sizeof(s));
     }
 
     return true;
@@ -399,7 +405,6 @@ class HashMap {
   const size_t num_total_buckets;    // Sum of regular and extra buckets
   const size_t reqd_space;           // Total bytes needed for the table
   const Key invalid_key;
-  hugealloc::HugeAlloc huge_alloc;
 
   Bucket* buckets_ = nullptr;
 
@@ -409,24 +414,22 @@ class HashMap {
 
   std::vector<size_t> extra_bucket_free_list;
 
-  uint8_t* maybe_pbuf;  // The pmem or DRAM buffer for this table
-  size_t mapped_len;    // The length mapped by libpmem
+  uint8_t* pbuf;      // The pmem buffer for this table
+  size_t mapped_len;  // The length mapped by libpmem
   RedoLog* redo_log;
   size_t cur_sequence_number = 1;
 
   struct {
-    bool prefetch = true;    // Software prefetching
-    bool redo_batch = true;  // Redo log batching
-
-    // If enabled, slot writes on SET use _persist instead of _nodrain
-    bool nodrain_slot = true;
+    bool prefetch = true;     // Software prefetching
+    bool redo_batch = true;   // Redo log batching
+    bool async_drain = true;  // Drain slot writes asynchronously
 
     void reset() {
       prefetch = true;
       redo_batch = true;
-      nodrain_slot = true;
+      async_drain = true;
     }
   } opts;
 };
 
-}  // namespace mica
+}  // namespace pmica
