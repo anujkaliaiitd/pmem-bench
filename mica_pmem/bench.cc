@@ -249,8 +249,8 @@ void sweep_optimizations() {
 
 int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  // sweep_optimizations();
-  // exit(0);
+  sweep_optimizations();
+  exit(0);
 
   barrier = new Barrier(FLAGS_num_threads);
   std::vector<std::thread> threads(FLAGS_num_threads);

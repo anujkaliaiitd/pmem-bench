@@ -1,7 +1,7 @@
 batch_size=16
 benchmark=5050
 
-keys_total=100000
+keys_total=1000000000
 
 rm -rf /tmp/mica_bench*
 

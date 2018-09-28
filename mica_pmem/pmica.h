@@ -239,16 +239,13 @@ class HashMap {
   // returns, all SETs are persistent in the log.
   //
   // For GETs, value_arr slots contain results. For SETs, they contain the value
-  // to SET.
-  void batch_op_drain(bool* is_set, const Key* key_arr, Value* value_arr,
-                      bool* success_arr, size_t n) {
-    size_t keyhash_arr[kMaxBatchSize];
-
+  // to SET. This version of batch_op_drain assumes that the caller hash already
+  // issued prefetches.
+  void batch_op_drain_helper(bool* is_set, size_t* keyhash_arr,
+                             const Key* key_arr, Value* value_arr,
+                             bool* success_arr, size_t n) {
     bool all_gets = true;
     for (size_t i = 0; i < n; i++) {
-      keyhash_arr[i] = get_hash(key_arr[i]);
-      prefetch(keyhash_arr[i]);
-
       if (is_set[i]) {
         all_gets = false;
         RedoLogEntry v_rle(cur_sequence_number, key_arr[i], value_arr[i]);
@@ -286,6 +283,24 @@ class HashMap {
         success_arr[i] = get(keyhash_arr[i], key_arr[i], value_arr[i]);
       }
     }
+  }
+
+  // Batched operation that takes in both GETs and SETs. When this function
+  // returns, all SETs are persistent in the log.
+  //
+  // For GETs, value_arr slots contain results. For SETs, they contain the value
+  // to SET. This version of batch_op_drain issues prefetches for the caller.
+  inline void batch_op_drain(bool* is_set, const Key* key_arr, Value* value_arr,
+                             bool* success_arr, size_t n) {
+    size_t keyhash_arr[kMaxBatchSize];
+
+    for (size_t i = 0; i < n; i++) {
+      keyhash_arr[i] = get_hash(key_arr[i]);
+      prefetch(keyhash_arr[i]);
+    }
+
+    batch_op_drain_helper(is_set, keyhash_arr, key_arr, value_arr, success_arr,
+                          n);
   }
 
   bool get(const Key& key, Value& out_value) const {
