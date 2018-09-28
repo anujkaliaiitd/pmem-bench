@@ -6,6 +6,7 @@
 #include "../common.h"
 #include "pmica.h"
 
+DEFINE_string(pmem_file, "/dev/dax12.0", "Persistent memory file name");
 DEFINE_uint64(table_key_capacity, MB(1), "Number of keys in table per thread");
 DEFINE_uint64(batch_size, pmica::kMaxBatchSize, "Batch size");
 DEFINE_string(benchmark, "get", "Benchmark to run");
@@ -135,7 +136,7 @@ void thread_func(size_t thread_id) {
       HashMap::get_required_bytes(FLAGS_table_key_capacity, kDefaultOverhead);
   bytes_per_map = roundup<256>(bytes_per_map);
 
-  auto *hashmap = new HashMap("/dev/dax12.0", thread_id * bytes_per_map,
+  auto *hashmap = new HashMap(FLAGS_pmem_file, thread_id * bytes_per_map,
                               FLAGS_table_key_capacity, kDefaultOverhead);
 
   printf("thread %zu: Populating hashmap. Expected time = %.1f seconds\n",
@@ -188,8 +189,8 @@ void sweep_do_one(HashMap *hashmap, size_t max_key, size_t batch_size,
 
 // Measure the effectiveness of optimizations with one thread
 void sweep_optimizations() {
-  auto *hashmap =
-      new HashMap("/dev/dax0.0", 0, FLAGS_table_key_capacity, kDefaultOverhead);
+  auto *hashmap = new HashMap(FLAGS_pmem_file, 0, FLAGS_table_key_capacity,
+                              kDefaultOverhead);
 
   printf("Populating hashmap. Expected time = %.1f seconds\n",
          FLAGS_table_key_capacity / (4.0 * 1000000));  // 4 M/s

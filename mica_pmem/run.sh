@@ -1,5 +1,6 @@
 batch_size=16
 benchmark=5050
+pmem_file="/dev/dax12.0"
 
 keys_total=1000000000
 
@@ -14,6 +15,7 @@ for num_threads in 1 2 4 8 16 24; do
       --table_key_capacity $keys_per_thread \
       --batch_size $batch_size \
       --benchmark $benchmark \
+      --pmem_file $pmem_file \
       --num_threads $num_threads
   fi
   printf "\n\n\n\n"
@@ -28,5 +30,6 @@ if [ "$#" -eq 1 ]; then
       --table_key_capacity $num_keys \
       --batch_size $batch_size \
       --benchmark $benchmark \
+      --pmem_file $pmem_file \
       --num_threads $num_threads
 fi
