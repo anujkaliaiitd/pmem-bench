@@ -7,7 +7,7 @@ static constexpr size_t kDefaultFileOffset = 1024;
 
 TEST(Basic, Simple) {
   size_t num_keys = 32;
-  pmica::HashMap<size_t, size_t> hashmap("/dev/dax0.0", kDefaultFileOffset,
+  pmica::HashMap<size_t, size_t> hashmap("/dev/dax12.0", kDefaultFileOffset,
                                          num_keys, 1.0);
 
   bool success = hashmap.set_nodrain(1, 1);
@@ -38,7 +38,7 @@ TEST(Basic, Simple) {
 
 TEST(Basic, Overload) {
   size_t num_keys = 32;
-  pmica::HashMap<size_t, size_t> hashmap("/dev/dax0.0", kDefaultFileOffset,
+  pmica::HashMap<size_t, size_t> hashmap("/dev/dax12.0", kDefaultFileOffset,
                                          num_keys, 1.0);
 
   std::map<size_t, bool> insert_success_map;
@@ -62,7 +62,7 @@ TEST(Basic, Overload) {
 }
 
 TEST(Basic, Large) {
-  pmica::HashMap<size_t, size_t> hashmap("/dev/dax0.0", kDefaultFileOffset,
+  pmica::HashMap<size_t, size_t> hashmap("/dev/dax12.0", kDefaultFileOffset,
                                          (1ull << 30), 0.2);
 
   size_t num_keys = 32;
