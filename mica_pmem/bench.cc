@@ -4,7 +4,7 @@
 #include <mutex>
 #include <pcg/pcg_random.hpp>
 #include "../common.h"
-#include "mica_pmem.h"
+#include "pmica.h"
 
 DEFINE_uint64(table_key_capacity, MB(1), "Number of keys in table per thread");
 DEFINE_uint64(batch_size, pmica::kMaxBatchSize, "Batch size");

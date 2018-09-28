@@ -1,7 +1,7 @@
 #include <assert.h>
 #include <gtest/gtest.h>
 #include <map>
-#include "mica_pmem.h"
+#include "pmica.h"
 
 static constexpr size_t kDefaultFileOffset = 1024;
 
