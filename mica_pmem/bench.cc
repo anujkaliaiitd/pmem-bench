@@ -19,8 +19,12 @@ static constexpr double kNumaNode = 0;
 class Key {
  public:
   size_t key_frag[2];
-  bool operator==(const Key &rhs) { return memcmp(this, &rhs, sizeof(Key)); }
-  bool operator!=(const Key &rhs) { return !memcmp(this, &rhs, sizeof(Key)); }
+  bool operator==(const Key &rhs) const {
+    return memcmp(this, &rhs, sizeof(Key)) == 0;
+  }
+  bool operator!=(const Key &rhs) const {
+    return memcmp(this, &rhs, sizeof(Key)) != 0;
+  }
   Key() { memset(key_frag, 0, sizeof(Key)); }
 };
 
