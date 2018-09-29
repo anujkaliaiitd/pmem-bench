@@ -241,9 +241,9 @@ class HashMap {
   // For GETs, value_arr slots contain results. For SETs, they contain the value
   // to SET. This version of batch_op_drain assumes that the caller hash already
   // issued prefetches.
-  inline __attribute__((always_inline, unused)) void batch_op_drain_helper(
-      bool* is_set, size_t* keyhash_arr, const Key** key_arr, Value** value_arr,
-      bool* success_arr, size_t n) {
+  void batch_op_drain_helper(bool* is_set, size_t* keyhash_arr,
+                             const Key** key_arr, Value** value_arr,
+                             bool* success_arr, size_t n) {
     bool all_gets = true;
     for (size_t i = 0; i < n; i++) {
       if (is_set[i]) {
@@ -392,7 +392,7 @@ class HashMap {
       }
     }
 
-    //printf("  set key %zu, value %zu success. bucket %p, index %zu\n",
+    // printf("  set key %zu, value %zu success. bucket %p, index %zu\n",
     //       *key, *value, located_bucket, item_index);
     Slot s(*key, *value);
     if (opts.async_drain) {
