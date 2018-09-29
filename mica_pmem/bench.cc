@@ -134,7 +134,7 @@ double batch_exp(HashMap *hashmap, size_t max_key, size_t batch_size,
   size_t num_success = 0;
   for (size_t i = 1; i <= kNumIters; i += batch_size) {
     for (size_t j = 0; j < batch_size; j++) {
-      key_arr[j].key_frag[0] = fastrange64(pcg(), max_key);
+      key_arr[j].key_frag[0] = 1 + fastrange64(pcg(), max_key - 1);
       val_arr[j].val_frag[0] = key_arr[j].key_frag[0];
 
       switch (workload) {
