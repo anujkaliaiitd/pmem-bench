@@ -179,7 +179,7 @@ class HashMap {
   }
 
   static size_t get_hash(const Key* k) {
-    return CityHash64(reinterpret_cast<const char*>(&k), sizeof(Key));
+    return CityHash64(reinterpret_cast<const char*>(k), sizeof(Key));
   }
 
   static Key get_invalid_key() {
@@ -319,7 +319,7 @@ class HashMap {
     if (item_index == kSlotsPerBucket) return false;
 
     // printf("get key %zu, bucket %p, index %zu\n",
-    //      key, located_bucket, item_index);
+    //      *key, located_bucket, item_index);
 
     *out_value = located_bucket->slot_arr[item_index].value;
     return true;
@@ -376,7 +376,7 @@ class HashMap {
   bool set_nodrain(uint64_t key_hash, const Key* key, const Value* value) {
     assert(*key != invalid_key);
 
-    // printf("set key %zu, value %zu\n");
+    // printf("set key %zu, value %zu\n", *key, *value);
 
     size_t bucket_index = key_hash & (num_regular_buckets - 1);
     Bucket* bucket = &buckets_[bucket_index];
@@ -392,8 +392,8 @@ class HashMap {
       }
     }
 
-    // printf("  set key %zu, value %zu success. bucket %p, index %zu\n",
-    //      key, value, located_bucket, item_index);
+    //printf("  set key %zu, value %zu success. bucket %p, index %zu\n",
+    //       *key, *value, located_bucket, item_index);
     Slot s(*key, *value);
     if (opts.async_drain) {
       pmem_memcpy_nodrain(&located_bucket->slot_arr[item_index], &s, sizeof(s));
