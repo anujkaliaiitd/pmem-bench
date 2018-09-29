@@ -17,6 +17,7 @@ namespace pmica {
 static constexpr size_t kSlotsPerBucket = 8;
 static constexpr size_t kMaxBatchSize = 16;
 static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 8;
+static constexpr bool kPMicaVerbose = false;
 
 /// Check a condition at runtime. If the condition is false, throw exception.
 static inline void rt_assert(bool condition, std::string throw_str) {
@@ -167,7 +168,7 @@ class HashMap {
 
   /// Return the total bytes required for a table with \p num_requested_keys
   /// keys and \p overhead_fraction extra buckets. The returned space includes
-  /// redo log.
+  /// redo log. The returned space is aligned to 256 bytes.
   static size_t get_required_bytes(size_t num_requested_keys,
                                    double overhead_fraction) {
     size_t num_regular_buckets =
@@ -175,7 +176,8 @@ class HashMap {
     size_t num_extra_buckets = num_regular_buckets * overhead_fraction;
     size_t num_total_buckets = num_regular_buckets + num_extra_buckets;
 
-    return sizeof(RedoLog) + num_total_buckets * sizeof(Bucket);
+    size_t tot_size = sizeof(RedoLog) + num_total_buckets * sizeof(Bucket);
+    return roundup<256>(tot_size);
   }
 
   static size_t get_hash(const Key* k) {
@@ -186,6 +188,16 @@ class HashMap {
     Key ret;
     memset(&ret, 0, sizeof(ret));
     return ret;
+  }
+
+  // Convert a key to a 64-bit value for printing
+  static size_t to_size_t_key(const Key* k) {
+    return *reinterpret_cast<const size_t*>(k);
+  }
+
+  // Convert a value to a 64-bit value for printing
+  static size_t to_size_t_val(const Value* v) {
+    return *reinterpret_cast<const size_t*>(v);
   }
 
   // Initialize the contents of both regular and extra buckets
@@ -316,10 +328,14 @@ class HashMap {
 
     Bucket* located_bucket;
     size_t item_index = find_item_index(bucket, key, &located_bucket);
-    if (item_index == kSlotsPerBucket) return false;
 
-    // printf("get key %zu, bucket %p, index %zu\n",
-    //      *key, located_bucket, item_index);
+    if (kPMicaVerbose) {
+      printf("get key %zu, located bucket %p, index %zu, found = %s\n",
+             to_size_t_key(key), static_cast<void*>(located_bucket), item_index,
+             (item_index == kSlotsPerBucket) ? "yes" : "no");
+    }
+
+    if (item_index == kSlotsPerBucket) return false;
 
     *out_value = located_bucket->slot_arr[item_index].value;
     return true;
@@ -376,7 +392,10 @@ class HashMap {
   bool set_nodrain(uint64_t key_hash, const Key* key, const Value* value) {
     assert(*key != invalid_key);
 
-    // printf("set key %zu, value %zu\n", *key, *value);
+    if (kPMicaVerbose) {
+      printf("set key %zu, value %zu\n", to_size_t_key(key),
+             to_size_t_val(value));
+    }
 
     size_t bucket_index = key_hash & (num_regular_buckets - 1);
     Bucket* bucket = &buckets_[bucket_index];
@@ -384,16 +403,24 @@ class HashMap {
     size_t item_index = find_item_index(bucket, key, &located_bucket);
 
     if (item_index == kSlotsPerBucket) {
-      // printf("  not found in bucket %p\n", bucket);
+      if (kPMicaVerbose) {
+        printf("  not found in bucket %p\n", static_cast<void*>(bucket));
+      }
       item_index = get_empty(bucket, &located_bucket);
       if (item_index == kSlotsPerBucket) {
-        // printf("  no empty bucket %p\n", bucket);
+        if (kPMicaVerbose) {
+          printf("  no empty bucket %p\n", static_cast<void*>(bucket));
+        }
         return false;
       }
     }
 
-    // printf("  set key %zu, value %zu success. bucket %p, index %zu\n",
-    //       *key, *value, located_bucket, item_index);
+    if (kPMicaVerbose) {
+      printf("  set key %zu, value %zu success. bucket %p, index %zu\n",
+             to_size_t_key(key), to_size_t_val(value),
+             static_cast<void*>(located_bucket), item_index);
+    }
+
     Slot s(*key, *value);
     if (opts.async_drain) {
       pmem_memcpy_nodrain(&located_bucket->slot_arr[item_index], &s, sizeof(s));
