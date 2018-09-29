@@ -12,7 +12,7 @@ DEFINE_uint64(batch_size, pmica::kMaxBatchSize, "Batch size");
 DEFINE_string(benchmark, "get", "Benchmark to run");
 DEFINE_uint64(num_threads, 1, "Number of threads");
 
-static constexpr double kDefaultOverhead = 0.2;
+static constexpr double kDefaultOverhead = 0.42;
 static constexpr double kNumaNode = 0;
 
 // MICA's ``small'' workload: 16-byte keys and 64-byte values

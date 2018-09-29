@@ -2,7 +2,8 @@ batch_size=16
 benchmark=5050
 pmem_file="/dev/dax12.0"
 
-keys_total=10000000
+million=1048576
+keys_total=`expr 1 \* $million`
 
 rm -rf /tmp/mica_bench*
 
