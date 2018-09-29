@@ -63,9 +63,16 @@ size_t populate(HashMap *hashmap, size_t thread_id) {
   bool is_set_arr[pmica::kMaxBatchSize];
   Key key_arr[pmica::kMaxBatchSize];
   Value val_arr[pmica::kMaxBatchSize];
+  Key *key_ptr_arr[pmica::kMaxBatchSize];
+  Value *val_ptr_arr[pmica::kMaxBatchSize];
   bool success_arr[pmica::kMaxBatchSize];
 
   size_t num_success = 0;
+
+  for (size_t i = 0; i < pmica::kMaxBatchSize; i++) {
+    key_ptr_arr[i] = &key_arr[i];
+    val_ptr_arr[i] = &val_arr[i];
+  }
 
   size_t progress_console_lim = FLAGS_table_key_capacity / 10;
 
@@ -76,8 +83,8 @@ size_t populate(HashMap *hashmap, size_t thread_id) {
       val_arr[j].val_frag[0] = i + j;
     }
 
-    hashmap->batch_op_drain(is_set_arr, key_arr, val_arr, success_arr,
-                            pmica::kMaxBatchSize);
+    hashmap->batch_op_drain(is_set_arr, const_cast<const Key **>(key_ptr_arr),
+                            val_ptr_arr, success_arr, pmica::kMaxBatchSize);
 
     if (i >= progress_console_lim) {
       printf("thread %zu: %.2f percent done\n", thread_id,
@@ -104,8 +111,15 @@ double batch_exp(HashMap *hashmap, size_t max_key, size_t batch_size,
   bool is_set_arr[pmica::kMaxBatchSize];
   Key key_arr[pmica::kMaxBatchSize];
   Value val_arr[pmica::kMaxBatchSize];
+  Key *key_ptr_arr[pmica::kMaxBatchSize];
+  Value *val_ptr_arr[pmica::kMaxBatchSize];
   bool success_arr[pmica::kMaxBatchSize];
   clock_gettime(CLOCK_REALTIME, &start);
+
+  for (size_t i = 0; i < pmica::kMaxBatchSize; i++) {
+    key_ptr_arr[i] = &key_arr[i];
+    val_ptr_arr[i] = &val_arr[i];
+  }
 
   size_t num_success = 0;
   for (size_t i = 1; i <= kNumIters; i += batch_size) {
@@ -120,8 +134,8 @@ double batch_exp(HashMap *hashmap, size_t max_key, size_t batch_size,
       }
     }
 
-    hashmap->batch_op_drain(is_set_arr, key_arr, val_arr, success_arr,
-                            batch_size);
+    hashmap->batch_op_drain(is_set_arr, const_cast<const Key **>(key_ptr_arr),
+                            val_ptr_arr, success_arr, batch_size);
 
     for (size_t j = 0; j < batch_size; j++) num_success += success_arr[j];
   }

@@ -77,8 +77,8 @@ class HashMap {
 
     char padding[128 - (sizeof(seq_num) + sizeof(key) + sizeof(value))];
 
-    RedoLogEntry(size_t seq_num, Key key, Value value)
-        : seq_num(seq_num), key(key), value(value) {}
+    RedoLogEntry(size_t seq_num, const Key* key, const Value* value)
+        : seq_num(seq_num), key(*key), value(*value) {}
     RedoLogEntry() {}
   };
 
@@ -178,7 +178,7 @@ class HashMap {
     return sizeof(RedoLog) + num_total_buckets * sizeof(Bucket);
   }
 
-  static size_t get_hash(const Key& k) {
+  static size_t get_hash(const Key* k) {
     return CityHash64(reinterpret_cast<const char*>(&k), sizeof(Key));
   }
 
@@ -216,13 +216,13 @@ class HashMap {
   // Find a bucket (\p located_bucket) and slot index (return value) in the
   // chain starting from \p bucket that contains \p key. If no such bucket is
   // found, return kSlotsPerBucket.
-  size_t find_item_index(Bucket* bucket, const Key& key,
+  size_t find_item_index(Bucket* bucket, const Key* key,
                          Bucket** located_bucket) const {
     Bucket* current_bucket = bucket;
 
     while (true) {
       for (size_t i = 0; i < kSlotsPerBucket; i++) {
-        if (current_bucket->slot_arr[i].key != key) continue;
+        if (current_bucket->slot_arr[i].key != *key) continue;
 
         *located_bucket = current_bucket;
         return i;
@@ -241,10 +241,9 @@ class HashMap {
   // For GETs, value_arr slots contain results. For SETs, they contain the value
   // to SET. This version of batch_op_drain assumes that the caller hash already
   // issued prefetches.
-  inline __attribute__ ((always_inline, unused))
-  void batch_op_drain_helper(bool* is_set, size_t* keyhash_arr,
-                             const Key* key_arr, Value* value_arr,
-                             bool* success_arr, size_t n) {
+  inline __attribute__((always_inline, unused)) void batch_op_drain_helper(
+      bool* is_set, size_t* keyhash_arr, const Key** key_arr, Value** value_arr,
+      bool* success_arr, size_t n) {
     bool all_gets = true;
     for (size_t i = 0; i < n; i++) {
       if (is_set[i]) {
@@ -291,8 +290,8 @@ class HashMap {
   //
   // For GETs, value_arr slots contain results. For SETs, they contain the value
   // to SET. This version of batch_op_drain issues prefetches for the caller.
-  inline void batch_op_drain(bool* is_set, const Key* key_arr, Value* value_arr,
-                             bool* success_arr, size_t n) {
+  inline void batch_op_drain(bool* is_set, const Key** key_arr,
+                             Value** value_arr, bool* success_arr, size_t n) {
     size_t keyhash_arr[kMaxBatchSize];
 
     for (size_t i = 0; i < n; i++) {
@@ -304,13 +303,13 @@ class HashMap {
                           n);
   }
 
-  bool get(const Key& key, Value& out_value) const {
-    assert(key != invalid_key);
+  bool get(const Key* key, Value* out_value) const {
+    assert(*key != invalid_key);
     return get(get_hash(key), key, out_value);
   }
 
-  bool get(uint64_t key_hash, const Key& key, Value& out_value) const {
-    assert(key != invalid_key);
+  bool get(uint64_t key_hash, const Key* key, Value* out_value) const {
+    assert(*key != invalid_key);
 
     size_t bucket_index = key_hash & (num_regular_buckets - 1);
     Bucket* bucket = &buckets_[bucket_index];
@@ -322,7 +321,7 @@ class HashMap {
     // printf("get key %zu, bucket %p, index %zu\n",
     //      key, located_bucket, item_index);
 
-    out_value = located_bucket->slot_arr[item_index].value;
+    *out_value = located_bucket->slot_arr[item_index].value;
     return true;
   }
 
@@ -367,15 +366,15 @@ class HashMap {
   }
 
   // Set a key-value item without a final sfence
-  bool set_nodrain(const Key& key, const Value& value) {
-    assert(key != invalid_key);
+  bool set_nodrain(const Key* key, const Value* value) {
+    assert(*key != invalid_key);
     return set_nodrain(get_hash(key), key, value);
   }
 
   // Set a key-value item without a final sfence. If redo logging is disabled, a
   // final sfence is used.
-  bool set_nodrain(uint64_t key_hash, const Key& key, const Value& value) {
-    assert(key != invalid_key);
+  bool set_nodrain(uint64_t key_hash, const Key* key, const Value* value) {
+    assert(*key != invalid_key);
 
     // printf("set key %zu, value %zu\n");
 
@@ -395,7 +394,7 @@ class HashMap {
 
     // printf("  set key %zu, value %zu success. bucket %p, index %zu\n",
     //      key, value, located_bucket, item_index);
-    Slot s(key, value);
+    Slot s(*key, *value);
     if (opts.async_drain) {
       pmem_memcpy_nodrain(&located_bucket->slot_arr[item_index], &s, sizeof(s));
     } else {

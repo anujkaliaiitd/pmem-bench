@@ -10,29 +10,42 @@ TEST(Basic, Simple) {
   pmica::HashMap<size_t, size_t> hashmap("/dev/dax12.0", kDefaultFileOffset,
                                          num_keys, 1.0);
 
-  bool success = hashmap.set_nodrain(1, 1);
+  size_t key, value;
+
+  key = 1;
+  value = 1;
+  bool success = hashmap.set_nodrain(&key, &value);
   assert(success);
 
-  success = hashmap.set_nodrain(1, 1);
+  key = 2;
+  value = 2;
+  success = hashmap.set_nodrain(&key, &value);
   assert(success);
 
-  success = hashmap.set_nodrain(2, 2);
+  success = hashmap.set_nodrain(&key, &value);
   assert(success);
 
-  success = hashmap.set_nodrain(3, 3);
+  key = 3;
+  value = 3;
+  success = hashmap.set_nodrain(&key, &value);
   assert(success);
 
-  size_t val = 0;
-  success = hashmap.get(1, val);
-  assert(val == 1);
+  key = 1;
+  value = 0;
+  success = hashmap.get(&key, &value);
+  assert(value == 1);
   assert(success);
 
-  success = hashmap.get(2, val);
-  assert(val == 2);
+  key = 2;
+  value = 0;
+  success = hashmap.get(&key, &value);
+  assert(value == 2);
   assert(success);
 
-  success = hashmap.get(4, val);
-  assert(val == 2);
+  key = 4;
+  value = 0;
+  success = hashmap.get(&key, &value);
+  assert(value == 0);
   assert(!success);
 }
 
@@ -45,7 +58,7 @@ TEST(Basic, Overload) {
   size_t num_success = 0;
 
   for (size_t i = 1; i <= num_keys; i++) {
-    bool success = hashmap.set_nodrain(i, i);
+    bool success = hashmap.set_nodrain(&i, &i);
     insert_success_map[i] = success;
 
     if (success) num_success++;
@@ -55,7 +68,7 @@ TEST(Basic, Overload) {
 
   for (size_t i = 1; i <= num_keys; i++) {
     size_t v;
-    bool success = hashmap.get(i, v);
+    bool success = hashmap.get(&i, &v);
     assert(success == insert_success_map[i]);
     if (success) assert(v == i);
   }
@@ -70,7 +83,7 @@ TEST(Basic, Large) {
   size_t num_success = 0;
 
   for (size_t i = 1; i <= num_keys; i++) {
-    bool success = hashmap.set_nodrain(i, i);
+    bool success = hashmap.set_nodrain(&i, &i);
     insert_success_map[i] = success;
 
     if (success) num_success++;
@@ -80,7 +93,7 @@ TEST(Basic, Large) {
 
   for (size_t i = 1; i <= num_keys; i++) {
     size_t v;
-    bool success = hashmap.get(i, v);
+    bool success = hashmap.get(&i, &v);
     assert(success == insert_success_map[i]);
     if (success) assert(v == i);
   }
