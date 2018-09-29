@@ -78,9 +78,11 @@ size_t populate(HashMap *hashmap, size_t thread_id) {
     val_ptr_arr[i] = &val_arr[i];
   }
 
-  size_t progress_console_lim = FLAGS_table_key_capacity / 10;
+  const size_t num_keys_to_insert =
+      roundup<pmica::kMaxBatchSize>(FLAGS_table_key_capacity);
+  size_t progress_console_lim = num_keys_to_insert / 10;
 
-  for (size_t i = 1; i <= FLAGS_table_key_capacity; i += pmica::kMaxBatchSize) {
+  for (size_t i = 1; i <= num_keys_to_insert; i += pmica::kMaxBatchSize) {
     for (size_t j = 0; j < pmica::kMaxBatchSize; j++) {
       is_set_arr[j] = true;
       key_arr[j].key_frag[0] = i + j;
@@ -92,13 +94,17 @@ size_t populate(HashMap *hashmap, size_t thread_id) {
 
     if (i >= progress_console_lim) {
       printf("thread %zu: %.2f percent done\n", thread_id,
-             i * 1.0 / FLAGS_table_key_capacity);
-      progress_console_lim += FLAGS_table_key_capacity / 10;
+             i * 1.0 / num_keys_to_insert);
+      progress_console_lim += num_keys_to_insert / 10;
     }
 
     for (size_t j = 0; j < pmica::kMaxBatchSize; j++) {
       num_success += success_arr[j];
-      if (!success_arr[j]) return num_success;
+      if (!success_arr[j]) {
+        printf("thread %zu: populate() failed at key %zu of %zu keys\n",
+               thread_id, i + j, num_keys_to_insert);
+        return num_success;
+      }
     }
   }
 

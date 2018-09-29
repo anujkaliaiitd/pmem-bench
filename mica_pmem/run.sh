@@ -2,7 +2,7 @@ batch_size=16
 benchmark=5050
 pmem_file="/dev/dax12.0"
 
-keys_total=1000000000
+keys_total=10000000
 
 rm -rf /tmp/mica_bench*
 
