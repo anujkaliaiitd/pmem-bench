@@ -1,9 +1,10 @@
 batch_size=16
 benchmark=5050
+sweep_optimizations=0
 pmem_file="/dev/dax12.0"
 
 million=1048576
-keys_total=`expr 1 \* $million`
+keys_total=`expr 1024 \* $million`
 
 rm -rf /tmp/mica_bench*
 
@@ -17,9 +18,10 @@ for num_threads in 1 2 4 8 16 24; do
       --batch_size $batch_size \
       --benchmark $benchmark \
       --pmem_file $pmem_file \
+      --sweep_optimizations $sweep_optimizations \
       --num_threads $num_threads
   fi
-  printf "\n\n\n\n"
+  printf "\n\n"
 done
 
 num_threads=1

@@ -11,6 +11,7 @@ DEFINE_uint64(table_key_capacity, MB(1), "Number of keys in table per thread");
 DEFINE_uint64(batch_size, pmica::kMaxBatchSize, "Batch size");
 DEFINE_string(benchmark, "get", "Benchmark to run");
 DEFINE_uint64(num_threads, 1, "Number of threads");
+DEFINE_uint64(sweep_optimizations, 0, "Sweep optimizations");
 
 //
 // Overhead to occupancy map:
@@ -33,7 +34,7 @@ class Key {
 
 class Value {
  public:
-  size_t val_frag[8];
+  size_t val_frag[4];
   Value() { memset(val_frag, 0, sizeof(Value)); }
 };
 
@@ -287,8 +288,13 @@ void sweep_optimizations() {
 
 int main(int argc, char **argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  sweep_optimizations();
-  exit(0);
+
+  if (FLAGS_sweep_optimizations == 1) {
+    std::thread t = std::thread(sweep_optimizations);
+    bind_to_core(t, kNumaNode, 0);
+    t.join();
+    exit(0);
+  }
 
   barrier = new Barrier(FLAGS_num_threads);
   std::vector<std::thread> threads(FLAGS_num_threads);
