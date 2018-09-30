@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "huge_alloc.h"
 
 namespace pmica {
 
@@ -18,6 +19,7 @@ static constexpr size_t kSlotsPerBucket = 8;
 static constexpr size_t kMaxBatchSize = 16;
 static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 8;
 static constexpr bool kPMicaVerbose = false;
+static constexpr size_t kNumaNode = 0;
 
 /// Check a condition at runtime. If the condition is false, throw exception.
 static inline void rt_assert(bool condition, std::string throw_str) {
@@ -134,6 +136,7 @@ class HashMap {
     printf("Space required = %.4f GB, key capacity = %.4f M\n",
            reqd_space * 1.0 / (1ull << 30), get_key_capacity() / 1000000.0);
 
+    huge_alloc = new hugealloc::HugeAlloc(kNumaNode);
     pbuf = map_pbuf(mapped_len);
 
     // Set the committed seq num, and all redo log entry seq nums to zero.
@@ -164,6 +167,7 @@ class HashMap {
 
   ~HashMap() {
     if (pbuf != nullptr) pmem_unmap(pbuf - file_offset, mapped_len);
+    if (huge_alloc != nullptr) delete huge_alloc;
   }
 
   /// Return the total bytes required for a table with \p num_requested_keys
@@ -460,6 +464,7 @@ class HashMap {
   Bucket* extra_buckets_ = nullptr;
 
   std::vector<size_t> extra_bucket_free_list;
+  hugealloc::HugeAlloc* huge_alloc;
 
   uint8_t* pbuf;      // The pmem buffer for this table
   size_t mapped_len;  // The length mapped by libpmem

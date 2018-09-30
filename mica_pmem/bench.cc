@@ -12,7 +12,10 @@ DEFINE_uint64(batch_size, pmica::kMaxBatchSize, "Batch size");
 DEFINE_string(benchmark, "get", "Benchmark to run");
 DEFINE_uint64(num_threads, 1, "Number of threads");
 
-static constexpr double kDefaultOverhead = 0.42;
+//
+// Overhead to occupancy map:
+// 0.05 -> 0.56
+static constexpr double kDefaultOverhead = 0.05;
 static constexpr double kNumaNode = 0;
 
 // MICA's ``small'' workload: 16-byte keys and 64-byte values
@@ -134,20 +137,26 @@ double batch_exp(HashMap *hashmap, size_t max_key, size_t batch_size,
   size_t num_success = 0;
   for (size_t i = 1; i <= kNumIters; i += batch_size) {
     for (size_t j = 0; j < batch_size; j++) {
-      key_arr[j].key_frag[0] = 1 + fastrange64(pcg(), max_key - 1);
-      val_arr[j].val_frag[0] = key_arr[j].key_frag[0];
-
       switch (workload) {
         case Workload::kGets: is_set_arr[j] = false; break;
         case Workload::kSets: is_set_arr[j] = true; break;
         case Workload::k5050: is_set_arr[j] = pcg() % 2 == 0; break;
       }
+
+      key_arr[j].key_frag[0] = 1 + fastrange64(pcg(), max_key - 1);
+      val_arr[j].val_frag[0] = is_set_arr[j] ? key_arr[j].key_frag[0] : 0;
     }
 
     hashmap->batch_op_drain(is_set_arr, const_cast<const Key **>(key_ptr_arr),
                             val_ptr_arr, success_arr, batch_size);
 
-    for (size_t j = 0; j < batch_size; j++) num_success += success_arr[j];
+    for (size_t j = 0; j < batch_size; j++) {
+      num_success += success_arr[j];
+      if (!is_set_arr[j] && val_arr[j].val_frag[0] != key_arr[j].key_frag[0]) {
+        printf("invalid value %zu for key %zu\n", val_arr[j].val_frag[0],
+               key_arr[j].key_frag[0]);
+      }
+    }
   }
 
   double seconds = sec_since(start);
@@ -167,6 +176,8 @@ void thread_func(size_t thread_id) {
          thread_id, FLAGS_table_key_capacity / (4.0 * 1000000));  // 4 M/s
 
   size_t max_key = populate(hashmap, thread_id);
+  printf("thread %zu: final occupancy = %.2f\n", thread_id,
+         max_key * 1.0 / hashmap->get_key_capacity());
 
   std::vector<double> tput_vec;
   Workload workload;
@@ -220,6 +231,8 @@ void sweep_optimizations() {
          FLAGS_table_key_capacity / (4.0 * 1000000));  // 4 M/s
 
   size_t max_key = populate(hashmap, 0 /* thread_id */);
+  printf("Final occupancy = %.2f\n",
+         max_key * 1.0 / hashmap->get_key_capacity());
 
   std::vector<size_t> batch_size_vec = {1, 4, 8, 16};
 
