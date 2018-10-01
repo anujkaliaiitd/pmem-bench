@@ -6,7 +6,7 @@
 #include <time.h>
 
 static constexpr size_t kNumIters = 1000000;
-static constexpr size_t kFileSizeGB = 128;
+static constexpr size_t kFileSizeGB = 1024;
 static constexpr size_t kFileSizeBytes = (1ull << 30) * kFileSizeGB;
 static constexpr const char* kPmemFile = "/mnt/pmem12/raft_log";
 
@@ -45,7 +45,7 @@ int main() {
       rand_sample = (rand_sample << 5);  // Ignore LSBs to get larger numbers
 
       size_t file_offset = (sum + rand_sample) % kFileSizeBytes;
-      sum += pbuf[file_offset];
+      sum += pbuf[file_offset];  // Make the next read dependent
     }
 
     double bench_ns = ns_since(bench_start);
