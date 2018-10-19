@@ -8,7 +8,7 @@
 static constexpr size_t kNumIters = 1000000;
 static constexpr size_t kFileSizeGB = 1024;
 static constexpr size_t kFileSizeBytes = (1ull << 30) * kFileSizeGB;
-static constexpr const char* kPmemFile = "/mnt/pmem12/raft_log";
+static constexpr const char *kPmemFile = "/mnt/pmem12/raft_log";
 
 inline uint32_t fastrand(uint64_t &seed) {
   seed = seed * 1103515245 + 12345;
@@ -28,7 +28,7 @@ int main() {
   uint8_t *pbuf = reinterpret_cast<uint8_t *>(
       pmem_map_file(kPmemFile, 0, 0, 0666, &mapped_len, &is_pmem));
   assert(pbuf != nullptr);
-  assert(mapped_len >= kFileSizeGB);
+  assert(mapped_len >= kFileSizeBytes);
   assert(is_pmem == 1);
 
   uint64_t seed = 0xdeadbeef;
@@ -49,8 +49,8 @@ int main() {
     }
 
     double bench_ns = ns_since(bench_start);
-    printf("Average read latency = %.1f ns, sum = %zu\n",
-           bench_ns / kNumIters, sum);
+    printf("Average read latency = %.1f ns, sum = %zu\n", bench_ns / kNumIters,
+           sum);
   }
 
   pmem_unmap(pbuf, mapped_len);

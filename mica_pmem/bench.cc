@@ -65,6 +65,13 @@ static inline uint64_t fastrange64(uint64_t rand, uint64_t n) {
       static_cast<__uint128_t>(rand) * static_cast<__uint128_t>(n) >> 64);
 }
 
+/// Generate a key for a thread's partition. Each partition hosts a contiguous
+/// range of keys {1, ..., max_key}
+static inline size_t gen_key(size_t offset_in_partition, size_t thread_id) {
+  assert(thread_id <= 31);
+  return ((offset_in_partition << 5) | thread_id);
+}
+
 typedef pmica::HashMap<Key, Value> HashMap;
 
 size_t populate(HashMap *hashmap, size_t thread_id) {
@@ -89,8 +96,9 @@ size_t populate(HashMap *hashmap, size_t thread_id) {
   for (size_t i = 1; i <= num_keys_to_insert; i += pmica::kMaxBatchSize) {
     for (size_t j = 0; j < pmica::kMaxBatchSize; j++) {
       is_set_arr[j] = true;
-      key_arr[j].key_frag[0] = i + j;
-      val_arr[j].val_frag[0] = i + j;
+      size_t offset_in_partition = (i + j);
+      key_arr[j].key_frag[0] = gen_key(offset_in_partition, thread_id);
+      val_arr[j].val_frag[0] = key_arr[j].key_frag[0];
     }
 
     hashmap->batch_op_drain(is_set_arr, const_cast<const Key **>(key_ptr_arr),
@@ -117,7 +125,7 @@ size_t populate(HashMap *hashmap, size_t thread_id) {
 
 enum class Workload { kGets, kSets, k5050 };
 double batch_exp(HashMap *hashmap, size_t max_key, size_t batch_size,
-                 Workload workload) {
+                 Workload workload, size_t thread_id) {
   pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
   constexpr size_t kNumIters = MB(1);
 
@@ -144,7 +152,9 @@ double batch_exp(HashMap *hashmap, size_t max_key, size_t batch_size,
         case Workload::k5050: is_set_arr[j] = pcg() % 2 == 0; break;
       }
 
-      key_arr[j].key_frag[0] = 1 + fastrange64(pcg(), max_key - 1);
+      size_t offset_in_partition = 1 + fastrange64(pcg(), max_key - 1);
+
+      key_arr[j].key_frag[0] = gen_key(offset_in_partition, thread_id);
       val_arr[j].val_frag[0] = is_set_arr[j] ? key_arr[j].key_frag[0] : 0;
     }
 
@@ -191,7 +201,8 @@ void thread_func(size_t thread_id) {
   printf("thread %zu, starting work.\n", thread_id);
 
   for (size_t i = 0; i < 10; i++) {
-    double tput = batch_exp(hashmap, max_key, FLAGS_batch_size, workload);
+    double tput =
+        batch_exp(hashmap, max_key, FLAGS_batch_size, workload, thread_id);
     printf("thread %zu, iter %zu: tput = %.2f\n", thread_id, i, tput);
     tput_vec.push_back(tput);
   }
@@ -206,13 +217,14 @@ void thread_func(size_t thread_id) {
   delete hashmap;
 }
 
+// Measure the effectiveness of optimizations with one thread, given a config
 void sweep_do_one(HashMap *hashmap, size_t max_key, size_t batch_size,
                   Workload workload) {
   std::vector<double> tput_vec;
 
   for (size_t i = 0; i < 10; i++) {
     double tput;
-    tput = batch_exp(hashmap, max_key, batch_size, workload);
+    tput = batch_exp(hashmap, max_key, batch_size, workload, 0 /* thread_id */);
     tput_vec.push_back(tput);
   }
 

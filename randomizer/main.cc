@@ -1,11 +1,11 @@
 // This can be used to write random contents to a pmem file so that later
 // experiments don't benefit from any crazy value prediction of a zeroed file.
 
-#include "../common.h"
 #include <libpmem.h>
 #include <pcg/pcg_random.hpp>
+#include "../common.h"
 
-static constexpr const char *kPmemFile = "/dev/dax0.0";
+static constexpr const char *kPmemFile = "/mnt/pmem12/raft_log";
 static constexpr size_t kPmemFileSizeGB = 1024;  // The expected file size
 static constexpr size_t kPmemFileSize = kPmemFileSizeGB * GB(1);
 static constexpr size_t kRandTemplateSz = GB(32);

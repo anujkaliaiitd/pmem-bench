@@ -3,8 +3,8 @@ benchmark=5050
 sweep_optimizations=0
 pmem_file="/dev/dax12.0"
 
-million=1048576
-keys_total=`expr 1024 \* $million`
+one_million=1048576  # Just a constant to adjust keys_total below
+keys_total=`expr 1024 \* $one_million`
 
 rm -rf /tmp/mica_bench*
 

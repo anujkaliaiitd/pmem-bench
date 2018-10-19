@@ -63,18 +63,20 @@ int main(int argc, char **argv) {
   rt_assert(reinterpret_cast<size_t>(pbuf) % 4096 == 0,
             "Mapped buffer isn't page-aligned");
   rt_assert(is_pmem == 1, "File is not pmem");
+  printf("Mapped file of length %.2f GB\n", mapped_len * 1.0 / GB(1));
 
   // map_in_file_by_page(pbuf);
   // map_in_file_whole(pbuf);
 
   std::string bench_func;  // Last one wins
   bench_func = "bench_seq_write_tput";
-  bench_func = "bench_seq_write_tput";
-  bench_func = "bench_seq_write_latency";
   bench_func = "bench_seq_read_latency";
   bench_func = "bench_rand_write_latency";
   bench_func = "bench_rand_write_tput";
   bench_func = "bench_rand_read_tput";
+  bench_func = "bench_seq_write_tput";
+  bench_func = "bench_seq_write_latency";
+  bench_func = "bench_rand_read_latency";
 
   // Sequential write throughput
   if (bench_func == "bench_seq_write_tput") {
