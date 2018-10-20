@@ -15,7 +15,7 @@
 
 namespace phopscotch {
 
-static constexpr size_t kBitmapSize = 8;
+static constexpr size_t kBitmapSize = 32;
 static constexpr size_t kMaxBatchSize = 16;
 static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 8;
 static constexpr bool kVerbose = false;
@@ -116,8 +116,8 @@ class HashMap {
       fprintf(stderr,
               "pmem file too small. %.2f GB required for hash table "
               "(%zu buckets, bucket size = %zu), but only %.2f GB available\n",
-              reqd_space * 1.0 / (1ull << 30), num_total_buckets,
-              sizeof(Bucket), mapped_len * 1.0 / (1ull << 30));
+              reqd_space * 1.0 / (1ull << 30), num_buckets, sizeof(Bucket),
+              mapped_len * 1.0 / (1ull << 30));
     }
     rt_assert(is_pmem == 1, "File is not pmem");
 
@@ -128,7 +128,7 @@ class HashMap {
       : pmem_file(pmem_file),
         file_offset(file_offset),
         num_requested_keys(num_requested_keys),
-        num_total_buckets(rte_align64pow2(num_requested_keys)),
+        num_buckets(rte_align64pow2(num_requested_keys)),
         reqd_space(get_required_bytes(num_requested_keys)),
         invalid_key(get_invalid_key()) {
     rt_assert(num_requested_keys >= 1, ">=1 buckets needed");
@@ -153,16 +153,49 @@ class HashMap {
 
   // Initialize the contents of both regular and extra buckets
   void reset() {
-    double GB_to_memset =
-        num_total_buckets * sizeof(Bucket) * 1.0 / (1ull << 30);
+    double GB_to_memset = num_buckets * sizeof(Bucket) * 1.0 / (1ull << 30);
     printf("Resetting hash table. This might take a while (~ %.1f seconds)\n",
            GB_to_memset / 3.0);
 
-    pmem_memset_persist(&buckets[0], 0, num_total_buckets * sizeof(Bucket));
+    pmem_memset_persist(&buckets[0], 0, num_buckets * sizeof(Bucket));
   }
 
-  bool get(const Key* key, Value* out_value) {
-    size_t bucket_idx = get_hash(key) & (num_total_buckets - 1);
+  void prefetch(uint64_t key_hash) const {
+    if (!opts.prefetch) return;
+
+    size_t bucket_index = key_hash & (num_buckets - 1);
+    const Bucket* bucket = &buckets[bucket_index];
+
+    // Prefetching two cache lines seems to works best
+    __builtin_prefetch(bucket, 0, 0);
+    __builtin_prefetch(reinterpret_cast<const char*>(bucket) + 64, 0, 0);
+  }
+
+  // Batched operation that takes in both GETs and SETs. When this function
+  // returns, all SETs are persistent in the log.
+  //
+  // For GETs, value_arr slots contain results. For SETs, they contain the value
+  // to SET. This version of batch_op_drain issues prefetches for the caller.
+  inline void batch_op_drain(bool* is_set, const Key** key_arr,
+                             Value** value_arr, bool* success_arr, size_t n) {
+    size_t keyhash_arr[kMaxBatchSize];
+
+    for (size_t i = 0; i < n; i++) {
+      keyhash_arr[i] = get_hash(key_arr[i]);
+      prefetch(keyhash_arr[i]);
+    }
+
+    batch_op_drain_helper(is_set, keyhash_arr, key_arr, value_arr, success_arr,
+                          n);
+  }
+
+  bool get(const Key* key, Value* out_value) const {
+    assert(*key != invalid_key);
+    return get(get_hash(key), key, out_value);
+  }
+
+  bool get(size_t key_hash, const Key* key, Value* out_value) const {
+    size_t bucket_idx = key_hash & (num_buckets - 1);
 
     if (kVerbose) {
       printf("get: key %zu, bucket_idx %zu\n", to_size_t_key(key), bucket_idx);
@@ -180,8 +213,14 @@ class HashMap {
     return false;
   }
 
-  bool set(Key* key, Value* value) {
-    const size_t bucket_idx = get_hash(key) & (num_total_buckets - 1);
+  // Set a key-value item without a final sfence
+  bool set_nodrain(const Key* key, const Value* value) {
+    assert(*key != invalid_key);
+    return set_nodrain(get_hash(key), key, value);
+  }
+
+  bool set_nodrain(size_t keyhash, const Key* key, const Value* value) {
+    const size_t bucket_idx = keyhash & (num_buckets - 1);
 
     if (kVerbose) {
       printf("set: key %zu, value %zu, bucket_idx %zu\n", to_size_t_key(key),
@@ -199,7 +238,7 @@ class HashMap {
     }
 
     // Linear probing to find an empty bucket
-    for (size_t i = bucket_idx; i < num_total_buckets; i++) {
+    for (size_t i = bucket_idx; i < num_buckets; i++) {
       if (buckets[i].key == invalid_key) {
         if (kVerbose) printf("  bucket %zu is empty\n", i);
 
@@ -264,8 +303,8 @@ class HashMap {
   /// keys. The returned space includes redo log. The returned space is aligned
   /// to 256 bytes.
   static size_t get_required_bytes(size_t num_requested_keys) {
-    size_t num_total_buckets = rte_align64pow2(num_requested_keys);
-    size_t tot_size = sizeof(RedoLog) + num_total_buckets * sizeof(Bucket);
+    size_t num_buckets = rte_align64pow2(num_requested_keys);
+    size_t tot_size = sizeof(RedoLog) + num_buckets * sizeof(Bucket);
     return roundup<256>(tot_size);
   }
 
@@ -290,7 +329,7 @@ class HashMap {
   }
 
   void print_buckets() const {
-    for (size_t i = 0; i < num_total_buckets; i++) {
+    for (size_t i = 0; i < num_buckets; i++) {
       printf("bucket %zu: %s\n", i, buckets[i].to_string().c_str());
     }
   }
@@ -300,8 +339,8 @@ class HashMap {
   const size_t file_offset;         // Offset in file where the table is placed
   const size_t num_requested_keys;  // User's requested key capacity
 
-  const size_t num_total_buckets;  // Total buckets
-  const size_t reqd_space;         // Total bytes needed for the table
+  const size_t num_buckets;  // Total buckets
+  const size_t reqd_space;   // Total bytes needed for the table
   const Key invalid_key;
 
   Bucket* buckets = nullptr;
@@ -310,6 +349,18 @@ class HashMap {
   size_t mapped_len;  // The length mapped by libpmem
   RedoLog* redo_log;
   size_t cur_sequence_number = 1;
+
+  struct {
+    bool prefetch = true;     // Software prefetching
+    bool redo_batch = true;   // Redo log batching
+    bool async_drain = true;  // Drain slot writes asynchronously
+
+    void reset() {
+      prefetch = true;
+      redo_batch = true;
+      async_drain = true;
+    }
+  } opts;
 };
 
 }  // namespace phopscotch

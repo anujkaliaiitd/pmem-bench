@@ -15,20 +15,20 @@ TEST(Basic, Simple) {
 
   key = 1;
   value = 1;
-  bool success = hashmap.set(&key, &value);
+  bool success = hashmap.set_nodrain(&key, &value);
   assert(success);
 
   key = 2;
   value = 2;
-  success = hashmap.set(&key, &value);
+  success = hashmap.set_nodrain(&key, &value);
   assert(success);
 
-  success = hashmap.set(&key, &value);
+  success = hashmap.set_nodrain(&key, &value);
   assert(success);
 
   key = 3;
   value = 3;
-  success = hashmap.set(&key, &value);
+  success = hashmap.set_nodrain(&key, &value);
   assert(success);
 
   key = 1;
@@ -51,7 +51,7 @@ TEST(Basic, Simple) {
 }
 
 TEST(Basic, Overload) {
-  size_t num_keys = phopscotch::kBitmapSize * 8;
+  size_t num_keys = 16384;
   phopscotch::HashMap<size_t, size_t> hashmap(kPmemFile, kDefaultFileOffset,
                                               num_keys);
 
@@ -59,7 +59,7 @@ TEST(Basic, Overload) {
   size_t num_success = 0;
 
   for (size_t i = 1; i <= num_keys; i++) {
-    bool success = hashmap.set(&i, &i);
+    bool success = hashmap.set_nodrain(&i, &i);
     insert_success_map[i] = success;
 
     if (success) num_success++;
@@ -84,7 +84,7 @@ TEST(Basic, Large) {
   size_t num_success = 0;
 
   for (size_t i = 1; i <= num_keys; i++) {
-    bool success = hashmap.set(&i, &i);
+    bool success = hashmap.set_nodrain(&i, &i);
     insert_success_map[i] = success;
 
     if (success) num_success++;
