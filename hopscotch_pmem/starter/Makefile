@@ -1,4 +1,4 @@
 all:
-	g++ -o basic basic.cc -lcityhash
+	g++ -o test test.cc -lcityhash -lgtest -lpmem
 clean:
-	rm basic
+	rm test
