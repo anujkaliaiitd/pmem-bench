@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-namespace hopscotch {
+namespace phopscotch {
 
 struct bucket_t {
   void *key;
@@ -152,4 +152,4 @@ void *remove(struct table_t *ht, void *key) {
 
   return nullptr;
 }
-}  // namespace hopscotch
+}  // namespace phopscotch
