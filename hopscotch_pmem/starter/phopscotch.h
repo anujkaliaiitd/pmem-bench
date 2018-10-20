@@ -162,9 +162,7 @@ class HashMap {
   }
 
   bool get(const Key* key, Value* out_value) {
-    size_t keyhash =
-        CityHash64(reinterpret_cast<const char*>(key), sizeof(Key));
-    size_t bucket_idx = keyhash & (num_total_buckets - 1);
+    size_t bucket_idx = get_hash(key) & (num_total_buckets - 1);
 
     if (kVerbose) {
       printf("get: key %zu, bucket_idx %zu\n", to_size_t_key(key), bucket_idx);
@@ -183,9 +181,7 @@ class HashMap {
   }
 
   bool set(Key* key, Value* value) {
-    const size_t keyhash =
-        CityHash64(reinterpret_cast<const char*>(key), sizeof(Key));
-    const size_t bucket_idx = keyhash & (num_total_buckets - 1);
+    const size_t bucket_idx = get_hash(key) & (num_total_buckets - 1);
 
     if (kVerbose) {
       printf("set: key %zu, value %zu, bucket_idx %zu\n", to_size_t_key(key),
@@ -195,7 +191,7 @@ class HashMap {
     for (size_t i = bucket_idx; i < bucket_idx + kBitmapSize; i++) {
       if (i == bucket_idx || buckets[bucket_idx].is_set(i - bucket_idx)) {
         if (memcmp(key, &buckets[i].key, sizeof(Key)) == 0) {
-          printf("  inserting at bucket %zu\n", i);
+          if (kVerbose) printf("  inserting at bucket %zu\n", i);
           buckets[i].value = *value;
           return true;
         }
