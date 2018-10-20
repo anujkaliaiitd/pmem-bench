@@ -55,22 +55,20 @@ TEST(Basic, Overload) {
   phopscotch::HashMap<size_t, size_t> hashmap(kPmemFile, kDefaultFileOffset,
                                               num_keys);
 
-  std::map<size_t, bool> insert_success_map;
-  size_t num_success = 0;
-
+  size_t max_key_inserted = 0;
   for (size_t i = 1; i <= num_keys; i++) {
     bool success = hashmap.set_nodrain(&i, &i);
-    insert_success_map[i] = success;
+    if (!success) break;
 
-    if (success) num_success++;
+    max_key_inserted = i;
   }
 
-  printf("Loaded fraction = %.2f\n", num_success * 1.0 / num_keys);
+  printf("Loaded fraction = %.2f\n", max_key_inserted * 1.0 / num_keys);
 
   for (size_t i = 1; i <= num_keys; i++) {
     size_t v;
     bool success = hashmap.get(&i, &v);
-    assert(success == insert_success_map[i]);
+    assert(success == (i <= max_key_inserted));
     if (success) assert(v == i);
   }
 }

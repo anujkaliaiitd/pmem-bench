@@ -4,7 +4,6 @@
 #include <mutex>
 #include <pcg/pcg_random.hpp>
 #include "../common.h"
-#include "pmica.h"
 
 DEFINE_string(pmem_file, "/dev/dax12.0", "Persistent memory file name");
 DEFINE_uint64(table_key_capacity, MB(1), "Number of keys in table per thread");
@@ -201,7 +200,8 @@ void thread_func(size_t thread_id) {
   printf("thread %zu, starting work.\n", thread_id);
 
   for (size_t i = 0; i < 10; i++) {
-    double tput = batch_exp(hashmap, max_key, FLAGS_batch_size, workload, thread_id);
+    double tput =
+        batch_exp(hashmap, max_key, FLAGS_batch_size, workload, thread_id);
     printf("thread %zu, iter %zu: tput = %.2f\n", thread_id, i, tput);
     tput_vec.push_back(tput);
   }

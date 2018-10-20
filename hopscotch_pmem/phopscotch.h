@@ -78,7 +78,7 @@ class HashMap {
       return std::string(buf);
     }
   };
-  static_assert(sizeof(Bucket::hopinfo * 8 >= kBitmapSize), "");
+  static_assert(sizeof(Bucket::hopinfo) * 8 >= kBitmapSize, "");
 
   // A redo log entry is committed iff its sequence number is less than or equal
   // to the committed_seq_num.
