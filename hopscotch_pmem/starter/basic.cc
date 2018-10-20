@@ -26,8 +26,8 @@
 static int test_init(void) {
   struct hopscotch::table_t *ht;
 
-  ht = hopscotch::init(NULL, 8);
-  if (NULL == ht) {
+  ht = hopscotch::init(nullptr, 8);
+  if (nullptr == ht) {
     return -1;
   }
 
@@ -49,14 +49,14 @@ static int test_lookup(void) {
   void *val;
 
   /* Initialize */
-  ht = hopscotch::init(NULL, 8);
-  if (NULL == ht) {
+  ht = hopscotch::init(nullptr, 8);
+  if (nullptr == ht) {
     return -1;
   }
 
   /* No entry */
   val = hopscotch::lookup(ht, key0);
-  if (NULL != val) {
+  if (nullptr != val) {
     /* Failed */
     return -1;
   }
@@ -86,7 +86,7 @@ static int test_lookup(void) {
 
   /* Lookup */
   val = hopscotch::lookup(ht, key1);
-  if (NULL != val) {
+  if (nullptr != val) {
     /* Failed */
     return -1;
   }

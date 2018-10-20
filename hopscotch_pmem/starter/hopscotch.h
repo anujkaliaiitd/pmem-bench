@@ -7,16 +7,14 @@
 
 namespace hopscotch {
 
-/* Initial size of buckets.  2 to the power of this value will be allocated. */
-#define HOPSCOTCH_INIT_BSIZE_EXPONENT 10
-/* Bitmap size used for linear probing in hopscotch hashing */
-#define HOPSCOTCH_HOPINFO_SIZE 32
-
 struct bucket_t {
   void *key;
   void *data;
   uint32_t hopinfo;
 } __attribute__((aligned(8)));
+
+// Bitmap size used for linear probing in hopscotch hashing
+static constexpr size_t kBitmapSize = sizeof(bucket_t::hopinfo) * 8;
 
 struct table_t {
   size_t exponent;
@@ -25,15 +23,12 @@ struct table_t {
   int _allocated;
 };
 
-/*
- * Initialize the hash table
- */
 struct table_t *init(struct table_t *ht, size_t keylen) {
   size_t exponent;
   bucket_t *buckets;
 
   /* Allocate buckets first */
-  exponent = HOPSCOTCH_INIT_BSIZE_EXPONENT;
+  exponent = 10;
   buckets = new bucket_t[1 << exponent];
   if (nullptr == buckets) {
     return nullptr;
@@ -61,26 +56,19 @@ void release(struct table_t *ht) {
   if (ht->_allocated) delete ht;
 }
 
-/*
- * Lookup
- */
 void *lookup(struct table_t *ht, void *key) {
   uint32_t h;
   size_t idx;
   size_t i;
   size_t sz;
 
-  sz = 1ULL << ht->exponent;
+  sz = 1ull << ht->exponent;
   h = CityHash64(reinterpret_cast<const char *>(key), ht->keylen);
   idx = h & (sz - 1);
 
-  if (!ht->buckets[idx].hopinfo) {
-    return nullptr;
-  }
-  for (i = 0; i < HOPSCOTCH_HOPINFO_SIZE; i++) {
+  for (i = 0; i < kBitmapSize; i++) {
     if (ht->buckets[idx].hopinfo & (1 << i)) {
       if (0 == memcmp(key, ht->buckets[idx + i].key, ht->keylen)) {
-        /* Found */
         return ht->buckets[idx + i].data;
       }
     }
@@ -97,16 +85,16 @@ int update(struct table_t *ht, void *key, void *data) {
   size_t off;
   size_t j;
 
-  sz = 1ULL << ht->exponent;
+  sz = 1ull << ht->exponent;
   h = CityHash64(reinterpret_cast<const char *>(key), ht->keylen);
   idx = h & (sz - 1);
 
-  /* Linear probing to find an empty bucket */
+  // Linear probing to find an empty bucket
   for (i = idx; i < sz; i++) {
     if (nullptr == ht->buckets[i].key) {
       /* Found an available bucket */
-      while (i - idx >= HOPSCOTCH_HOPINFO_SIZE) {
-        for (j = 1; j < HOPSCOTCH_HOPINFO_SIZE; j++) {
+      while (i - idx >= kBitmapSize) {
+        for (j = 1; j < kBitmapSize; j++) {
           if (ht->buckets[i - j].hopinfo) {
             off =
                 static_cast<size_t>(__builtin_ctz(ht->buckets[i - j].hopinfo));
@@ -116,13 +104,13 @@ int update(struct table_t *ht, void *key, void *data) {
             ht->buckets[i].data = ht->buckets[i - j + off].data;
             ht->buckets[i - j + off].key = nullptr;
             ht->buckets[i - j + off].data = nullptr;
-            ht->buckets[i - j].hopinfo &= ~(1ULL << off);
-            ht->buckets[i - j].hopinfo |= (1ULL << j);
+            ht->buckets[i - j].hopinfo &= ~(1ull << off);
+            ht->buckets[i - j].hopinfo |= (1ull << j);
             i = i - j + off;
             break;
           }
         }
-        if (j >= HOPSCOTCH_HOPINFO_SIZE) {
+        if (j >= kBitmapSize) {
           return -1;
         }
       }
@@ -130,7 +118,7 @@ int update(struct table_t *ht, void *key, void *data) {
       off = i - idx;
       ht->buckets[i].key = key;
       ht->buckets[i].data = data;
-      ht->buckets[idx].hopinfo |= (1ULL << off);
+      ht->buckets[idx].hopinfo |= (1ull << off);
 
       return 0;
     }
@@ -146,19 +134,15 @@ void *remove(struct table_t *ht, void *key) {
   size_t sz;
   void *data;
 
-  sz = 1ULL << ht->exponent;
+  sz = 1ull << ht->exponent;
   h = CityHash64(reinterpret_cast<const char *>(key), ht->keylen);
   idx = h & (sz - 1);
 
-  if (!ht->buckets[idx].hopinfo) {
-    return nullptr;
-  }
-  for (i = 0; i < HOPSCOTCH_HOPINFO_SIZE; i++) {
+  for (i = 0; i < kBitmapSize; i++) {
     if (ht->buckets[idx].hopinfo & (1 << i)) {
       if (0 == memcmp(key, ht->buckets[idx + i].key, ht->keylen)) {
-        /* Found */
         data = ht->buckets[idx + i].data;
-        ht->buckets[idx].hopinfo &= ~(1ULL << i);
+        ht->buckets[idx].hopinfo &= ~(1ull << i);
         ht->buckets[idx + i].key = nullptr;
         ht->buckets[idx + i].data = nullptr;
         return data;
@@ -168,4 +152,4 @@ void *remove(struct table_t *ht, void *key) {
 
   return nullptr;
 }
-}
+}  // namespace hopscotch
