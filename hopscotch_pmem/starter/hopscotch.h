@@ -1,5 +1,6 @@
 #pragma once
 
+#include <city.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,26 +24,6 @@ struct table_t {
   bucket_t *buckets;
   int _allocated;
 };
-
-/*
- * Jenkins Hash Function
- */
-static __inline__ uint32_t _jenkins_hash(uint8_t *key, size_t len) {
-  uint32_t hash;
-  size_t i;
-
-  hash = 0;
-  for (i = 0; i < len; i++) {
-    hash += key[i];
-    hash += (hash << 10);
-    hash ^= (hash >> 6);
-  }
-  hash += (hash << 3);
-  hash ^= (hash >> 11);
-  hash += (hash << 15);
-
-  return hash;
-}
 
 /*
  * Initialize the hash table
@@ -90,7 +71,7 @@ void *lookup(struct table_t *ht, void *key) {
   size_t sz;
 
   sz = 1ULL << ht->exponent;
-  h = _jenkins_hash(reinterpret_cast<uint8_t *>(key), ht->keylen);
+  h = CityHash64(reinterpret_cast<const char *>(key), ht->keylen);
   idx = h & (sz - 1);
 
   if (!ht->buckets[idx].hopinfo) {
@@ -117,7 +98,7 @@ int update(struct table_t *ht, void *key, void *data) {
   size_t j;
 
   sz = 1ULL << ht->exponent;
-  h = _jenkins_hash(reinterpret_cast<uint8_t *>(key), ht->keylen);
+  h = CityHash64(reinterpret_cast<const char *>(key), ht->keylen);
   idx = h & (sz - 1);
 
   /* Linear probing to find an empty bucket */
@@ -166,7 +147,7 @@ void *remove(struct table_t *ht, void *key) {
   void *data;
 
   sz = 1ULL << ht->exponent;
-  h = _jenkins_hash(reinterpret_cast<uint8_t *>(key), ht->keylen);
+  h = CityHash64(reinterpret_cast<const char *>(key), ht->keylen);
   idx = h & (sz - 1);
 
   if (!ht->buckets[idx].hopinfo) {
