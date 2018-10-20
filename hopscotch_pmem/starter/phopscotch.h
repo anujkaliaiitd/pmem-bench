@@ -18,7 +18,7 @@ namespace phopscotch {
 static constexpr size_t kBitmapSize = 8;
 static constexpr size_t kMaxBatchSize = 16;
 static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 8;
-static constexpr bool kVerbose = true;
+static constexpr bool kVerbose = false;
 static constexpr size_t kNumaNode = 0;
 
 /// Check a condition at runtime. If the condition is false, throw exception.
@@ -66,9 +66,15 @@ class HashMap {
     Bucket(Key key, Value value) : key(key), value(value), hopinfo(0) {}
     Bucket() {}
 
+    // Return true if bit #idx is set in hopinfo
+    inline bool is_set(size_t idx) {
+      assert(idx > 0);
+      return (hopinfo & (1 << idx)) > 0;
+    }
+
     std::string to_string() {
       char buf[1000];
-      sprintf(buf, "[key %zu, value %zu, hopinfo %x]", key, value, hopinfo);
+      sprintf(buf, "[key %zu, value %zu, hopinfo 0x%x]", key, value, hopinfo);
       return std::string(buf);
     }
   };
@@ -165,7 +171,7 @@ class HashMap {
     }
 
     for (size_t i = bucket_idx; i < bucket_idx + kBitmapSize; i++) {
-      if (i == bucket_idx || buckets[i].hopinfo & (1 << (i - bucket_idx))) {
+      if (i == bucket_idx || buckets[bucket_idx].is_set(i - bucket_idx)) {
         if (memcmp(key, &buckets[i].key, sizeof(Key)) == 0) {
           if (kVerbose) printf("  found at bucket %zu\n", i);
           *out_value = buckets[i].value;
@@ -187,7 +193,7 @@ class HashMap {
     }
 
     for (size_t i = bucket_idx; i < bucket_idx + kBitmapSize; i++) {
-      if (i == bucket_idx || buckets[i].hopinfo & (1 << (i - bucket_idx))) {
+      if (i == bucket_idx || buckets[bucket_idx].is_set(i - bucket_idx)) {
         if (memcmp(key, &buckets[i].key, sizeof(Key)) == 0) {
           printf("  inserting at bucket %zu\n", i);
           buckets[i].value = *value;

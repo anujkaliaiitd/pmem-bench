@@ -17,23 +17,19 @@ TEST(Basic, Simple) {
   value = 1;
   bool success = hashmap.set(&key, &value);
   assert(success);
-  hashmap.print_buckets();
 
   key = 2;
   value = 2;
   success = hashmap.set(&key, &value);
   assert(success);
-  hashmap.print_buckets();
 
   success = hashmap.set(&key, &value);
   assert(success);
-  hashmap.print_buckets();
 
   key = 3;
   value = 3;
   success = hashmap.set(&key, &value);
   assert(success);
-  hashmap.print_buckets();
 
   key = 1;
   value = 0;
@@ -55,7 +51,7 @@ TEST(Basic, Simple) {
 }
 
 TEST(Basic, Overload) {
-  size_t num_keys = 32;
+  size_t num_keys = 16384;
   phopscotch::HashMap<size_t, size_t> hashmap(kPmemFile, kDefaultFileOffset,
                                               num_keys);
 
