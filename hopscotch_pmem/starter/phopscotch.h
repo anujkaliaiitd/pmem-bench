@@ -15,9 +15,10 @@
 
 namespace phopscotch {
 
+static constexpr size_t kBitmapSize = 8;
 static constexpr size_t kMaxBatchSize = 16;
 static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 8;
-static constexpr bool kVerbose = false;
+static constexpr bool kVerbose = true;
 static constexpr size_t kNumaNode = 0;
 
 /// Check a condition at runtime. If the condition is false, throw exception.
@@ -57,11 +58,21 @@ class HashMap {
    public:
     Key key;
     Value value;
+
+    // Bit i (i > 0) in hopinfo is one iff the entry at distance i also maps
+    // to this bucket. Bit 0 is unused.
     uint32_t hopinfo;
 
     Bucket(Key key, Value value) : key(key), value(value), hopinfo(0) {}
     Bucket() {}
+
+    std::string to_string() {
+      char buf[1000];
+      sprintf(buf, "[key %zu, value %zu, hopinfo %x]", key, value, hopinfo);
+      return std::string(buf);
+    }
   };
+  static_assert(sizeof(Bucket::hopinfo * 8 >= kBitmapSize), "");
 
   // A redo log entry is committed iff its sequence number is less than or equal
   // to the committed_seq_num.
@@ -83,11 +94,6 @@ class HashMap {
     RedoLogEntry entries[kNumRedoLogEntries];
     size_t committed_seq_num;
   };
-
-  // Bitmap size used for linear probing in hopscotch hashing
-  static constexpr size_t kBitmapSize = sizeof(Bucket::hopinfo) * 8;
-
-  Bucket* slots;
 
   // Initialize the persistent buffer for this hash table. This modifies only
   // mapped_len.
@@ -136,7 +142,7 @@ class HashMap {
   }
 
   ~HashMap() {
-    if (buckets != nullptr) delete[] buckets;
+    if (pbuf != nullptr) pmem_unmap(pbuf - file_offset, mapped_len);
   }
 
   // Initialize the contents of both regular and extra buckets
@@ -154,10 +160,15 @@ class HashMap {
         CityHash64(reinterpret_cast<const char*>(key), sizeof(Key));
     size_t bucket_idx = keyhash & (num_total_buckets - 1);
 
-    for (size_t i = 0; i < kBitmapSize; i++) {
-      if (buckets[i].hopinfo & (1 << i)) {
-        if (0 == memcmp(key, &buckets[bucket_idx + i].key, sizeof(Key))) {
-          *out_value = buckets[bucket_idx + i].value;
+    if (kVerbose) {
+      printf("get: key %zu, bucket_idx %zu\n", to_size_t_key(key), bucket_idx);
+    }
+
+    for (size_t i = bucket_idx; i < bucket_idx + kBitmapSize; i++) {
+      if (i == bucket_idx || buckets[i].hopinfo & (1 << (i - bucket_idx))) {
+        if (memcmp(key, &buckets[i].key, sizeof(Key)) == 0) {
+          if (kVerbose) printf("  found at bucket %zu\n", i);
+          *out_value = buckets[i].value;
           return true;
         }
       }
@@ -170,42 +181,81 @@ class HashMap {
         CityHash64(reinterpret_cast<const char*>(key), sizeof(Key));
     const size_t bucket_idx = keyhash & (num_total_buckets - 1);
 
-    // Linear probing to find an empty bucket
-    for (size_t i = bucket_idx; i < num_total_buckets; i++) {
-      if (buckets[i].key == invalid_key) {
-        // Found an available bucket
-        while (i - bucket_idx >= kBitmapSize) {
-          size_t j;
-          for (j = 1; j < kBitmapSize; j++) {
-            if (buckets[i - j].hopinfo) {
-              size_t off =
-                  static_cast<size_t>(__builtin_ctz(buckets[i - j].hopinfo));
-              if (off >= j) continue;
+    if (kVerbose) {
+      printf("set: key %zu, value %zu, bucket_idx %zu\n", to_size_t_key(key),
+             to_size_t_val(value), bucket_idx);
+    }
 
-              buckets[i].key = buckets[i - j + off].key;
-              buckets[i].value = buckets[i - j + off].value;
-
-              buckets[i - j + off].key = invalid_key;
-
-              buckets[i - j].hopinfo &= ~(1ull << off);
-              buckets[i - j].hopinfo |= (1ull << j);
-              i = i - j + off;
-              break;
-            }
-          }
-          if (j >= kBitmapSize) return -1;
+    for (size_t i = bucket_idx; i < bucket_idx + kBitmapSize; i++) {
+      if (i == bucket_idx || buckets[i].hopinfo & (1 << (i - bucket_idx))) {
+        if (memcmp(key, &buckets[i].key, sizeof(Key)) == 0) {
+          printf("  inserting at bucket %zu\n", i);
+          buckets[i].value = *value;
+          return true;
         }
-
-        size_t off = i - bucket_idx;
-        buckets[i].key = *key;
-        buckets[i].value = *value;
-        buckets[bucket_idx].hopinfo |= (1ull << off);
-
-        return 0;
       }
     }
 
-    return -1;
+    // Linear probing to find an empty bucket
+    for (size_t i = bucket_idx; i < num_total_buckets; i++) {
+      if (buckets[i].key == invalid_key) {
+        if (kVerbose) printf("  bucket %zu is empty\n", i);
+
+        // Found an available bucket
+        while (i - bucket_idx >= kBitmapSize) {
+          if (kVerbose) printf("    bucket %zu is too far\n", i);
+
+          size_t dist;  // Distance from bucket i
+          for (dist = 1; dist < kBitmapSize; dist++) {
+            if (buckets[i - dist].hopinfo) {
+              // If we are here, there is an additional entry that maps to
+              // bucket (i - dist). (i - dist + off) is the closest entry that
+              // maps to (i - dist).
+              const size_t off =
+                  static_cast<size_t>(__builtin_ctz(buckets[i - dist].hopinfo));
+              assert(off > 0);
+
+              if (off >= dist) continue;  // The closest entry is too far
+
+              if (kVerbose) {
+                printf("    moving to closer bucket\n", i - dist + off);
+              }
+
+              // If we are here, (i - dist + off) < i. We swap (i - dist + off)
+              // with i. Since entry at (i - dist + off) maps to bucket
+              // (i - dist), we need to update the bitmap at (i - dist).
+              buckets[i].key = buckets[i - dist + off].key;
+              buckets[i].value = buckets[i - dist + off].value;
+
+              buckets[i - dist + off].key = invalid_key;
+
+              // (i - dist + off) is now empty.
+              // (i - dist + dist) is now full.
+              buckets[i - dist].hopinfo &= ~(1ull << off);
+              buckets[i - dist].hopinfo |= (1ull << dist);
+              i = i - dist + off;
+              break;
+            }
+          }
+          if (dist >= kBitmapSize) {
+            if (kVerbose) printf("    giving up\n");
+            return false;
+          }
+        }
+
+        // Here, i - bucket_idx < kBitmapSize
+        if (kVerbose) printf("  finally using bucket %zu\n", i);
+        buckets[i].key = *key;
+        buckets[i].value = *value;
+
+        const size_t off = i - bucket_idx;
+        if (off != 0) buckets[bucket_idx].hopinfo |= (1ull << off);
+        return true;
+      }
+    }
+
+    // Found no empty bucket
+    return 0;
   }
 
   /// Return the total bytes required for a table with \p num_requested_keys
@@ -235,6 +285,12 @@ class HashMap {
   // Convert a value to a 64-bit value for printing
   static size_t to_size_t_val(const Value* v) {
     return *reinterpret_cast<const size_t*>(v);
+  }
+
+  void print_buckets() const {
+    for (size_t i = 0; i < num_total_buckets; i++) {
+      printf("bucket %zu: %s\n", i, buckets[i].to_string().c_str());
+    }
   }
 
   // Constructor args

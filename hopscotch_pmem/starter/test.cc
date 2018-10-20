@@ -17,19 +17,23 @@ TEST(Basic, Simple) {
   value = 1;
   bool success = hashmap.set(&key, &value);
   assert(success);
+  hashmap.print_buckets();
 
   key = 2;
   value = 2;
   success = hashmap.set(&key, &value);
   assert(success);
+  hashmap.print_buckets();
 
   success = hashmap.set(&key, &value);
   assert(success);
+  hashmap.print_buckets();
 
   key = 3;
   value = 3;
   success = hashmap.set(&key, &value);
   assert(success);
+  hashmap.print_buckets();
 
   key = 1;
   value = 0;
