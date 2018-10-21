@@ -15,7 +15,7 @@
 
 namespace phopscotch {
 
-static constexpr size_t kBitmapSize = 64;  // Neighborhood size
+static constexpr size_t kBitmapSize = 16;  // Neighborhood size
 
 // During insert(), we will look for an empty slot at most kMaxDistance away
 // from the key's hash bucket.
@@ -174,6 +174,24 @@ class HashMap {
     // Prefetching two cache lines seems to works best
     __builtin_prefetch(bucket, 0, 0);
     __builtin_prefetch(reinterpret_cast<const char*>(bucket) + 64, 0, 0);
+  }
+
+  // Batched operation that takes in both GETs and SETs. When this function
+  // returns, all SETs are persistent in the log.
+  //
+  // For GETs, value_arr slots contain results. For SETs, they contain the value
+  // to SET. This version of batch_op_drain assumes that the caller hash already
+  // issued prefetches.
+  void batch_op_drain_helper(bool* is_set, size_t* keyhash_arr,
+                             const Key** key_arr, Value** value_arr,
+                             bool* success_arr, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+      if (is_set[i]) {
+        success_arr[i] = set_nodrain(keyhash_arr[i], key_arr[i], value_arr[i]);
+      } else {
+        success_arr[i] = get(keyhash_arr[i], key_arr[i], value_arr[i]);
+      }
+    }
   }
 
   // Batched operation that takes in both GETs and SETs. When this function

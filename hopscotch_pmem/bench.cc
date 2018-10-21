@@ -4,10 +4,13 @@
 #include <mutex>
 #include <pcg/pcg_random.hpp>
 #include "../common.h"
+#include "phopscotch.h"
+
+#define table phopscotch
 
 DEFINE_string(pmem_file, "/dev/dax12.0", "Persistent memory file name");
 DEFINE_uint64(table_key_capacity, MB(1), "Number of keys in table per thread");
-DEFINE_uint64(batch_size, pmica::kMaxBatchSize, "Batch size");
+DEFINE_uint64(batch_size, table::kMaxBatchSize, "Batch size");
 DEFINE_string(benchmark, "get", "Benchmark to run");
 DEFINE_uint64(num_threads, 1, "Number of threads");
 DEFINE_uint64(sweep_optimizations, 0, "Sweep optimizations");
@@ -18,7 +21,6 @@ DEFINE_uint64(sweep_optimizations, 0, "Sweep optimizations");
 static constexpr double kDefaultOverhead = 0.05;
 static constexpr double kNumaNode = 0;
 
-// MICA's ``small'' workload: 16-byte keys and 64-byte values
 class Key {
  public:
   size_t key_frag[2];
@@ -33,7 +35,7 @@ class Key {
 
 class Value {
  public:
-  size_t val_frag[4];
+  size_t val_frag[8];
   Value() { memset(val_frag, 0, sizeof(Value)); }
 };
 
@@ -71,29 +73,29 @@ static inline size_t gen_key(size_t offset_in_partition, size_t thread_id) {
   return ((offset_in_partition << 5) | thread_id);
 }
 
-typedef pmica::HashMap<Key, Value> HashMap;
+typedef table::HashMap<Key, Value> HashMap;
 
 size_t populate(HashMap *hashmap, size_t thread_id) {
-  bool is_set_arr[pmica::kMaxBatchSize];
-  Key key_arr[pmica::kMaxBatchSize];
-  Value val_arr[pmica::kMaxBatchSize];
-  Key *key_ptr_arr[pmica::kMaxBatchSize];
-  Value *val_ptr_arr[pmica::kMaxBatchSize];
-  bool success_arr[pmica::kMaxBatchSize];
+  bool is_set_arr[table::kMaxBatchSize];
+  Key key_arr[table::kMaxBatchSize];
+  Value val_arr[table::kMaxBatchSize];
+  Key *key_ptr_arr[table::kMaxBatchSize];
+  Value *val_ptr_arr[table::kMaxBatchSize];
+  bool success_arr[table::kMaxBatchSize];
 
   size_t num_success = 0;
 
-  for (size_t i = 0; i < pmica::kMaxBatchSize; i++) {
+  for (size_t i = 0; i < table::kMaxBatchSize; i++) {
     key_ptr_arr[i] = &key_arr[i];
     val_ptr_arr[i] = &val_arr[i];
   }
 
   const size_t num_keys_to_insert =
-      roundup<pmica::kMaxBatchSize>(FLAGS_table_key_capacity);
+      roundup<table::kMaxBatchSize>(FLAGS_table_key_capacity);
   size_t progress_console_lim = num_keys_to_insert / 10;
 
-  for (size_t i = 1; i <= num_keys_to_insert; i += pmica::kMaxBatchSize) {
-    for (size_t j = 0; j < pmica::kMaxBatchSize; j++) {
+  for (size_t i = 1; i <= num_keys_to_insert; i += table::kMaxBatchSize) {
+    for (size_t j = 0; j < table::kMaxBatchSize; j++) {
       is_set_arr[j] = true;
       size_t offset_in_partition = (i + j);
       key_arr[j].key_frag[0] = gen_key(offset_in_partition, thread_id);
@@ -101,7 +103,7 @@ size_t populate(HashMap *hashmap, size_t thread_id) {
     }
 
     hashmap->batch_op_drain(is_set_arr, const_cast<const Key **>(key_ptr_arr),
-                            val_ptr_arr, success_arr, pmica::kMaxBatchSize);
+                            val_ptr_arr, success_arr, table::kMaxBatchSize);
 
     if (i >= progress_console_lim) {
       printf("thread %zu: %.2f percent done\n", thread_id,
@@ -109,7 +111,7 @@ size_t populate(HashMap *hashmap, size_t thread_id) {
       progress_console_lim += num_keys_to_insert / 10;
     }
 
-    for (size_t j = 0; j < pmica::kMaxBatchSize; j++) {
+    for (size_t j = 0; j < table::kMaxBatchSize; j++) {
       num_success += success_arr[j];
       if (!success_arr[j]) {
         printf("thread %zu: populate() failed at key %zu of %zu keys\n",
@@ -129,15 +131,15 @@ double batch_exp(HashMap *hashmap, size_t max_key, size_t batch_size,
   constexpr size_t kNumIters = MB(1);
 
   struct timespec start;
-  bool is_set_arr[pmica::kMaxBatchSize];
-  Key key_arr[pmica::kMaxBatchSize];
-  Value val_arr[pmica::kMaxBatchSize];
-  Key *key_ptr_arr[pmica::kMaxBatchSize];
-  Value *val_ptr_arr[pmica::kMaxBatchSize];
-  bool success_arr[pmica::kMaxBatchSize];
+  bool is_set_arr[table::kMaxBatchSize];
+  Key key_arr[table::kMaxBatchSize];
+  Value val_arr[table::kMaxBatchSize];
+  Key *key_ptr_arr[table::kMaxBatchSize];
+  Value *val_ptr_arr[table::kMaxBatchSize];
+  bool success_arr[table::kMaxBatchSize];
   clock_gettime(CLOCK_REALTIME, &start);
 
-  for (size_t i = 0; i < pmica::kMaxBatchSize; i++) {
+  for (size_t i = 0; i < table::kMaxBatchSize; i++) {
     key_ptr_arr[i] = &key_arr[i];
     val_ptr_arr[i] = &val_arr[i];
   }
@@ -175,19 +177,18 @@ double batch_exp(HashMap *hashmap, size_t max_key, size_t batch_size,
 }
 
 void thread_func(size_t thread_id) {
-  size_t bytes_per_map =
-      HashMap::get_required_bytes(FLAGS_table_key_capacity, kDefaultOverhead);
+  size_t bytes_per_map = HashMap::get_required_bytes(FLAGS_table_key_capacity);
   bytes_per_map = roundup<256>(bytes_per_map);
 
   auto *hashmap = new HashMap(FLAGS_pmem_file, thread_id * bytes_per_map,
-                              FLAGS_table_key_capacity, kDefaultOverhead);
+                              FLAGS_table_key_capacity);
 
   printf("thread %zu: Populating hashmap. Expected time = %.1f seconds\n",
          thread_id, FLAGS_table_key_capacity / (4.0 * 1000000));  // 4 M/s
 
   size_t max_key = populate(hashmap, thread_id);
   printf("thread %zu: final occupancy = %.2f\n", thread_id,
-         max_key * 1.0 / hashmap->get_key_capacity());
+         max_key * 1.0 / FLAGS_table_key_capacity);
 
   std::vector<double> tput_vec;
   Workload workload;
@@ -235,15 +236,13 @@ void sweep_do_one(HashMap *hashmap, size_t max_key, size_t batch_size,
 
 // Measure the effectiveness of optimizations with one thread
 void sweep_optimizations() {
-  auto *hashmap = new HashMap(FLAGS_pmem_file, 0, FLAGS_table_key_capacity,
-                              kDefaultOverhead);
+  auto *hashmap = new HashMap(FLAGS_pmem_file, 0, FLAGS_table_key_capacity);
 
   printf("Populating hashmap. Expected time = %.1f seconds\n",
          FLAGS_table_key_capacity / (4.0 * 1000000));  // 4 M/s
 
   size_t max_key = populate(hashmap, 0 /* thread_id */);
-  printf("Final occupancy = %.2f\n",
-         max_key * 1.0 / hashmap->get_key_capacity());
+  printf("Final occupancy = %.2f\n", max_key * 1.0 / FLAGS_table_key_capacity);
 
   std::vector<size_t> batch_size_vec = {1, 4, 8, 16};
 

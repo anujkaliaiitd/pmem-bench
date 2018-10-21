@@ -6,9 +6,11 @@
 #include "../common.h"
 #include "pmica.h"
 
+#define table pmica
+
 DEFINE_string(pmem_file, "/dev/dax12.0", "Persistent memory file name");
 DEFINE_uint64(table_key_capacity, MB(1), "Number of keys in table per thread");
-DEFINE_uint64(batch_size, pmica::kMaxBatchSize, "Batch size");
+DEFINE_uint64(batch_size, table::kMaxBatchSize, "Batch size");
 DEFINE_string(benchmark, "get", "Benchmark to run");
 DEFINE_uint64(num_threads, 1, "Number of threads");
 DEFINE_uint64(sweep_optimizations, 0, "Sweep optimizations");
@@ -19,7 +21,6 @@ DEFINE_uint64(sweep_optimizations, 0, "Sweep optimizations");
 static constexpr double kDefaultOverhead = 0.05;
 static constexpr double kNumaNode = 0;
 
-// MICA's ``small'' workload: 16-byte keys and 64-byte values
 class Key {
  public:
   size_t key_frag[2];
@@ -72,29 +73,29 @@ static inline size_t gen_key(size_t offset_in_partition, size_t thread_id) {
   return ((offset_in_partition << 5) | thread_id);
 }
 
-typedef pmica::HashMap<Key, Value> HashMap;
+typedef table::HashMap<Key, Value> HashMap;
 
 size_t populate(HashMap *hashmap, size_t thread_id) {
-  bool is_set_arr[pmica::kMaxBatchSize];
-  Key key_arr[pmica::kMaxBatchSize];
-  Value val_arr[pmica::kMaxBatchSize];
-  Key *key_ptr_arr[pmica::kMaxBatchSize];
-  Value *val_ptr_arr[pmica::kMaxBatchSize];
-  bool success_arr[pmica::kMaxBatchSize];
+  bool is_set_arr[table::kMaxBatchSize];
+  Key key_arr[table::kMaxBatchSize];
+  Value val_arr[table::kMaxBatchSize];
+  Key *key_ptr_arr[table::kMaxBatchSize];
+  Value *val_ptr_arr[table::kMaxBatchSize];
+  bool success_arr[table::kMaxBatchSize];
 
   size_t num_success = 0;
 
-  for (size_t i = 0; i < pmica::kMaxBatchSize; i++) {
+  for (size_t i = 0; i < table::kMaxBatchSize; i++) {
     key_ptr_arr[i] = &key_arr[i];
     val_ptr_arr[i] = &val_arr[i];
   }
 
   const size_t num_keys_to_insert =
-      roundup<pmica::kMaxBatchSize>(FLAGS_table_key_capacity);
+      roundup<table::kMaxBatchSize>(FLAGS_table_key_capacity);
   size_t progress_console_lim = num_keys_to_insert / 10;
 
-  for (size_t i = 1; i <= num_keys_to_insert; i += pmica::kMaxBatchSize) {
-    for (size_t j = 0; j < pmica::kMaxBatchSize; j++) {
+  for (size_t i = 1; i <= num_keys_to_insert; i += table::kMaxBatchSize) {
+    for (size_t j = 0; j < table::kMaxBatchSize; j++) {
       is_set_arr[j] = true;
       size_t offset_in_partition = (i + j);
       key_arr[j].key_frag[0] = gen_key(offset_in_partition, thread_id);
@@ -102,7 +103,7 @@ size_t populate(HashMap *hashmap, size_t thread_id) {
     }
 
     hashmap->batch_op_drain(is_set_arr, const_cast<const Key **>(key_ptr_arr),
-                            val_ptr_arr, success_arr, pmica::kMaxBatchSize);
+                            val_ptr_arr, success_arr, table::kMaxBatchSize);
 
     if (i >= progress_console_lim) {
       printf("thread %zu: %.2f percent done\n", thread_id,
@@ -110,7 +111,7 @@ size_t populate(HashMap *hashmap, size_t thread_id) {
       progress_console_lim += num_keys_to_insert / 10;
     }
 
-    for (size_t j = 0; j < pmica::kMaxBatchSize; j++) {
+    for (size_t j = 0; j < table::kMaxBatchSize; j++) {
       num_success += success_arr[j];
       if (!success_arr[j]) {
         printf("thread %zu: populate() failed at key %zu of %zu keys\n",
@@ -130,15 +131,15 @@ double batch_exp(HashMap *hashmap, size_t max_key, size_t batch_size,
   constexpr size_t kNumIters = MB(1);
 
   struct timespec start;
-  bool is_set_arr[pmica::kMaxBatchSize];
-  Key key_arr[pmica::kMaxBatchSize];
-  Value val_arr[pmica::kMaxBatchSize];
-  Key *key_ptr_arr[pmica::kMaxBatchSize];
-  Value *val_ptr_arr[pmica::kMaxBatchSize];
-  bool success_arr[pmica::kMaxBatchSize];
+  bool is_set_arr[table::kMaxBatchSize];
+  Key key_arr[table::kMaxBatchSize];
+  Value val_arr[table::kMaxBatchSize];
+  Key *key_ptr_arr[table::kMaxBatchSize];
+  Value *val_ptr_arr[table::kMaxBatchSize];
+  bool success_arr[table::kMaxBatchSize];
   clock_gettime(CLOCK_REALTIME, &start);
 
-  for (size_t i = 0; i < pmica::kMaxBatchSize; i++) {
+  for (size_t i = 0; i < table::kMaxBatchSize; i++) {
     key_ptr_arr[i] = &key_arr[i];
     val_ptr_arr[i] = &val_arr[i];
   }
