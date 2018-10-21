@@ -51,7 +51,7 @@ TEST(Basic, Simple) {
 }
 
 TEST(Basic, Overload) {
-  size_t num_keys = 128;
+  size_t num_keys = 64 * 1024;
   phopscotch::HashMap<size_t, size_t> hashmap(kPmemFile, kDefaultFileOffset,
                                               num_keys);
 
@@ -62,7 +62,6 @@ TEST(Basic, Overload) {
       size_t hash = hashmap.get_hash(&i);
       printf("Failed for key %zu, bucket %zuu\n", i,
              hash % hashmap.num_buckets);
-      // assert(success);
       break;
     }
 

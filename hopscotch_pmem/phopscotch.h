@@ -15,14 +15,14 @@
 
 namespace phopscotch {
 
-static constexpr size_t kBitmapSize = 32;  // Neighborhood size
+static constexpr size_t kBitmapSize = 64;  // Neighborhood size
 
 // During insert(), we will look for an empty slot at most kMaxDistance away
 // from the key's hash bucket.
 //
 // We provision the table with kMaxDistance extra buckets at the end. These
 // extra buckets are never direcly mapped, so their hopinfo is zero.
-static constexpr size_t kMaxDistance = 256;
+static constexpr size_t kMaxDistance = 1024;
 
 static constexpr size_t kMaxBatchSize = 16;
 static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 8;
@@ -69,13 +69,13 @@ class HashMap {
 
     // Bit i (i >= 0) in hopinfo is one iff the entry at distance i from this
     // bucket maps to this bucket.
-    uint32_t hopinfo;
+    size_t hopinfo;
 
     Bucket(Key key, Value value) : key(key), value(value), hopinfo(0) {}
     Bucket() {}
 
     // Return true if bit #idx is set in hopinfo
-    inline bool is_set(size_t idx) { return (hopinfo & (1 << idx)) > 0; }
+    inline bool is_set(size_t idx) { return (hopinfo & (1ull << idx)) > 0; }
 
     std::string to_string() {
       char buf[1000];
@@ -300,8 +300,8 @@ class HashMap {
 
           swap_bkt->key = invalid_key;
 
-          pivot_bkt->hopinfo |= (1 << (free_bkt - pivot_bkt));
-          pivot_bkt->hopinfo &= ~(1 << (swap_bkt - pivot_bkt));
+          pivot_bkt->hopinfo |= (1ull << (free_bkt - pivot_bkt));
+          pivot_bkt->hopinfo &= ~(1ull << (swap_bkt - pivot_bkt));
 
           free_bkt = swap_bkt;
           break;
