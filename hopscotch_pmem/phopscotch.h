@@ -22,7 +22,7 @@ static constexpr size_t kBitmapSize = 32;  // Neighborhood size
 //
 // We provision the table with kMaxDistance extra buckets at the end. These
 // extra buckets are never direcly mapped, so their hopinfo is zero.
-static constexpr size_t kMaxDistance = 1024;
+static constexpr size_t kMaxDistance = 256;
 
 static constexpr size_t kMaxBatchSize = 16;
 static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 8;
