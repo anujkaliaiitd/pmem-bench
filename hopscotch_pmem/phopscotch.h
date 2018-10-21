@@ -18,11 +18,15 @@ namespace phopscotch {
 static constexpr size_t kBitmapSize = 32;  // Neighborhood size
 
 // During insert(), we will look for an empty slot at most kMaxDistance away
-static constexpr size_t kMaxDistance = 256;
+// from the key's hash bucket.
+//
+// We provision the table with kMaxDistance extra buckets at the end. These
+// extra buckets are never direcly mapped, so their hopinfo is zero.
+static constexpr size_t kMaxDistance = 1024;
 
 static constexpr size_t kMaxBatchSize = 16;
 static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 8;
-static constexpr bool kVerbose = true;
+static constexpr bool kVerbose = false;
 static constexpr size_t kNumaNode = 0;
 
 /// Check a condition at runtime. If the condition is false, throw exception.
@@ -242,16 +246,13 @@ class HashMap {
     }
 
     // Linear probing to find an empty bucket
-    const size_t max_distance =
-        std::min(kMaxDistance, num_buckets - start_bkt_idx);
-
     Bucket* free_bkt = start_bkt;
-    for (size_t d_start_free = 0; d_start_free < max_distance; d_start_free++) {
+    for (size_t d_start_free = 0; d_start_free < kMaxDistance; d_start_free++) {
       if (free_bkt->key == invalid_key) break;
       free_bkt++;
     }
 
-    if (free_bkt == start_bkt + max_distance) {
+    if (free_bkt == start_bkt + kMaxDistance) {
       if (kVerbose) printf("  free bucket over max distance. failing.\n");
       return false;
     }
@@ -299,7 +300,7 @@ class HashMap {
 
           swap_bkt->key = invalid_key;
 
-          pivot_bkt->hopinfo |= (1 << d_pivot_free);
+          pivot_bkt->hopinfo |= (1 << (free_bkt - pivot_bkt));
           pivot_bkt->hopinfo &= ~(1 << (swap_bkt - pivot_bkt));
 
           free_bkt = swap_bkt;
@@ -320,7 +321,8 @@ class HashMap {
   /// to 256 bytes.
   static size_t get_required_bytes(size_t num_requested_keys) {
     size_t num_buckets = rte_align64pow2(num_requested_keys);
-    size_t tot_size = sizeof(RedoLog) + num_buckets * sizeof(Bucket);
+    size_t tot_size =
+        sizeof(RedoLog) + (num_buckets + kMaxDistance) * sizeof(Bucket);
     return roundup<256>(tot_size);
   }
 

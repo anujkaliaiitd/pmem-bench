@@ -60,8 +60,9 @@ TEST(Basic, Overload) {
     bool success = hashmap.set_nodrain(&i, &i);
     if (!success) {
       size_t hash = hashmap.get_hash(&i);
-      printf("Failed for bucket %zu of %zu\n", hash % hashmap.num_buckets,
-             hashmap.num_buckets);
+      printf("Failed for key %zu, bucket %zuu\n", i,
+             hash % hashmap.num_buckets);
+      // assert(success);
       break;
     }
 
