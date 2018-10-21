@@ -15,10 +15,14 @@
 
 namespace phopscotch {
 
-static constexpr size_t kBitmapSize = 32;
+static constexpr size_t kBitmapSize = 32;  // Neighborhood size
+
+// During insert(), we will look for an empty slot at most kMaxDistance away
+static constexpr size_t kMaxDistance = 256;
+
 static constexpr size_t kMaxBatchSize = 16;
 static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 8;
-static constexpr bool kVerbose = false;
+static constexpr bool kVerbose = true;
 static constexpr size_t kNumaNode = 0;
 
 /// Check a condition at runtime. If the condition is false, throw exception.
@@ -59,18 +63,15 @@ class HashMap {
     Key key;
     Value value;
 
-    // Bit i (i > 0) in hopinfo is one iff the entry at distance i also maps
-    // to this bucket. Bit 0 is unused.
+    // Bit i (i >= 0) in hopinfo is one iff the entry at distance i from this
+    // bucket maps to this bucket.
     uint32_t hopinfo;
 
     Bucket(Key key, Value value) : key(key), value(value), hopinfo(0) {}
     Bucket() {}
 
     // Return true if bit #idx is set in hopinfo
-    inline bool is_set(size_t idx) {
-      assert(idx > 0);
-      return (hopinfo & (1 << idx)) > 0;
-    }
+    inline bool is_set(size_t idx) { return (hopinfo & (1 << idx)) > 0; }
 
     std::string to_string() {
       char buf[1000];
@@ -202,7 +203,7 @@ class HashMap {
     }
 
     for (size_t i = bucket_idx; i < bucket_idx + kBitmapSize; i++) {
-      if (i == bucket_idx || buckets[bucket_idx].is_set(i - bucket_idx)) {
+      if (buckets[bucket_idx].is_set(i - bucket_idx)) {
         if (memcmp(key, &buckets[i].key, sizeof(Key)) == 0) {
           if (kVerbose) printf("  found at bucket %zu\n", i);
           *out_value = buckets[i].value;
@@ -220,83 +221,98 @@ class HashMap {
   }
 
   bool set_nodrain(size_t keyhash, const Key* key, const Value* value) {
-    const size_t bucket_idx = keyhash & (num_buckets - 1);
+    const size_t start_bkt_idx = keyhash & (num_buckets - 1);
+    Bucket* start_bkt = &buckets[start_bkt_idx];
 
     if (kVerbose) {
-      printf("set: key %zu, value %zu, bucket_idx %zu\n", to_size_t_key(key),
-             to_size_t_val(value), bucket_idx);
+      printf("set: key %zu, value %zu, bucket %zu\n", to_size_t_key(key),
+             to_size_t_val(value), start_bkt_idx);
     }
 
-    for (size_t i = bucket_idx; i < bucket_idx + kBitmapSize; i++) {
-      if (i == bucket_idx || buckets[bucket_idx].is_set(i - bucket_idx)) {
-        if (memcmp(key, &buckets[i].key, sizeof(Key)) == 0) {
-          if (kVerbose) printf("  inserting at bucket %zu\n", i);
-          buckets[i].value = *value;
+    // In-place update if the key exists already
+    for (size_t i = 0; i < kBitmapSize; i++) {
+      if (start_bkt->is_set(i)) {
+        Bucket* test_bkt = (start_bkt + i);
+        if (memcmp(key, &test_bkt->key, sizeof(Key)) == 0) {
+          if (kVerbose) printf("  inserting at bucket %zu\n", start_bkt + i);
+          test_bkt->value = *value;
           return true;
         }
       }
     }
 
     // Linear probing to find an empty bucket
-    for (size_t i = bucket_idx; i < num_buckets; i++) {
-      if (buckets[i].key == invalid_key) {
-        if (kVerbose) printf("  bucket %zu is empty\n", i);
+    const size_t max_distance =
+        std::min(kMaxDistance, num_buckets - start_bkt_idx);
 
-        // Found an available bucket
-        while (i - bucket_idx >= kBitmapSize) {
-          if (kVerbose) printf("    bucket %zu is too far\n", i);
+    Bucket* free_bkt = start_bkt;
+    for (size_t d_start_free = 0; d_start_free < max_distance; d_start_free++) {
+      if (free_bkt->key == invalid_key) break;
+      free_bkt++;
+    }
 
-          size_t dist;  // Distance from bucket i
-          for (dist = 1; dist < kBitmapSize; dist++) {
-            if (buckets[i - dist].hopinfo) {
-              // If we are here, there is an additional entry that maps to
-              // bucket (i - dist). (i - dist + off) is the closest entry that
-              // maps to (i - dist).
-              const size_t off =
-                  static_cast<size_t>(__builtin_ctz(buckets[i - dist].hopinfo));
-              assert(off > 0);
+    if (free_bkt == start_bkt + max_distance) {
+      if (kVerbose) printf("  free bucket over max distance. failing.\n");
+      return false;
+    }
 
-              if (off >= dist) continue;  // The closest entry is too far
+    while (true) {
+      if (free_bkt - start_bkt < kBitmapSize) {
+        if (kVerbose) {
+          printf("  finally using bucket %zu\n", free_bkt - buckets);
+        }
 
-              if (kVerbose) {
-                printf("    moving to closer bucket\n", i - dist + off);
-              }
+        start_bkt->hopinfo |= (1ull << (free_bkt - start_bkt));
+        free_bkt->value = *value;
+        free_bkt->key = *key;
+        return true;
+      }
 
-              // If we are here, (i - dist + off) < i. We swap (i - dist + off)
-              // with i. Since entry at (i - dist + off) maps to bucket
-              // (i - dist), we need to update the bitmap at (i - dist).
-              buckets[i].key = buckets[i - dist + off].key;
-              buckets[i].value = buckets[i - dist + off].value;
+      if (kVerbose) {
+        printf("  free bucket %zu too far.\n", free_bkt - buckets);
+      }
 
-              buckets[i - dist + off].key = invalid_key;
+      // Else, try to move free_bkt closer
+      Bucket* swap_bkt = nullptr;
 
-              // (i - dist + off) is now empty.
-              // (i - dist + dist) is now full.
-              buckets[i - dist].hopinfo &= ~(1ull << off);
-              buckets[i - dist].hopinfo |= (1ull << dist);
-              i = i - dist + off;
-              break;
-            }
-          }
-          if (dist >= kBitmapSize) {
-            if (kVerbose) printf("    giving up\n");
-            return false;
+      // d_pivot_free = distance of free_bkt from pivot_bkt
+      for (size_t d_pivot_free = kBitmapSize - 1; d_pivot_free > 0;
+           d_pivot_free--) {
+        Bucket* pivot_bkt = free_bkt - d_pivot_free;
+
+        // Check if any entry in [pivot_bkt, ..., free_bkt - 1] maps to
+        // pivot_bkt. Such an entry can be moved to free_bkt.
+        for (size_t d_pivot_swap = 0; d_pivot_swap < d_pivot_free;
+             d_pivot_swap++) {
+          if (pivot_bkt->is_set(d_pivot_swap)) {
+            swap_bkt = pivot_bkt + d_pivot_swap;
+            break;
           }
         }
 
-        // Here, i - bucket_idx < kBitmapSize
-        if (kVerbose) printf("  finally using bucket %zu\n", i);
-        buckets[i].key = *key;
-        buckets[i].value = *value;
+        if (swap_bkt != nullptr) {
+          if (kVerbose) printf("  swap with bkt %zu\n", (swap_bkt - buckets));
 
-        const size_t off = i - bucket_idx;
-        if (off != 0) buckets[bucket_idx].hopinfo |= (1ull << off);
-        return true;
+          // We found a swap
+          free_bkt->key = swap_bkt->key;
+          free_bkt->value = swap_bkt->value;
+
+          swap_bkt->key = invalid_key;
+
+          pivot_bkt->hopinfo |= (1 << d_pivot_free);
+          pivot_bkt->hopinfo &= ~(1 << (swap_bkt - pivot_bkt));
+
+          free_bkt = swap_bkt;
+          break;
+        }
+      }  // End search over pivot buckets
+
+      if (swap_bkt == nullptr) {
+        // If no pivot bucket found, insert failed
+        if (kVerbose) printf("  no pivot bucket found\n");
+        return false;
       }
     }
-
-    // Found no empty bucket
-    return 0;
   }
 
   /// Return the total bytes required for a table with \p num_requested_keys

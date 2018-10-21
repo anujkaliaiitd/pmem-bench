@@ -51,14 +51,19 @@ TEST(Basic, Simple) {
 }
 
 TEST(Basic, Overload) {
-  size_t num_keys = 16384;
+  size_t num_keys = 128;
   phopscotch::HashMap<size_t, size_t> hashmap(kPmemFile, kDefaultFileOffset,
                                               num_keys);
 
   size_t max_key_inserted = 0;
   for (size_t i = 1; i <= num_keys; i++) {
     bool success = hashmap.set_nodrain(&i, &i);
-    if (!success) break;
+    if (!success) {
+      size_t hash = hashmap.get_hash(&i);
+      printf("Failed for bucket %zu of %zu\n", hash % hashmap.num_buckets,
+             hashmap.num_buckets);
+      break;
+    }
 
     max_key_inserted = i;
   }
