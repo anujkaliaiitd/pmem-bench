@@ -1,0 +1,582 @@
+#pragma once
+
+#include <city.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <assert.h>
+#include <city.h>
+#include <libpmem.h>
+#include <stdexcept>
+#include <string>
+#include <vector>
+#include "huge_alloc.h"
+
+namespace phopscotch {
+
+static constexpr size_t kBitmapSize = 63;  // Neighborhood size
+
+// During insert(), we will look for an empty slot at most kMaxDistance away
+// from the key's hash bucket.
+//
+// We provision the table with kMaxDistance extra buckets at the end. These
+// extra buckets are never direcly mapped, so their hopinfo is zero.
+static constexpr size_t kMaxDistance = 1024;
+
+static constexpr size_t kMaxBatchSize = 16;
+static constexpr size_t kNumRedoLogEntries = kMaxBatchSize * 8;
+static constexpr bool kVerbose = false;
+static constexpr size_t kNumaNode = 0;
+
+/// Check a condition at runtime. If the condition is false, throw exception.
+static inline void rt_assert(bool condition, std::string throw_str) {
+  if (!condition) throw std::runtime_error(throw_str);
+}
+
+// Aligns 64b input parameter to the next power of 2
+static uint64_t rte_align64pow2(uint64_t v) {
+  v--;
+  v |= v >> 1;
+  v |= v >> 2;
+  v |= v >> 4;
+  v |= v >> 8;
+  v |= v >> 16;
+  v |= v >> 32;
+
+  return v + 1;
+}
+
+template <typename T>
+static constexpr bool is_power_of_two(T x) {
+  return x && ((x & T(x - 1)) == 0);
+}
+
+template <uint64_t PowerOfTwoNumber, typename T>
+static constexpr T roundup(T x) {
+  static_assert(is_power_of_two(PowerOfTwoNumber),
+                "PowerOfTwoNumber must be a power of 2");
+  return ((x) + T(PowerOfTwoNumber - 1)) & (~T(PowerOfTwoNumber - 1));
+}
+
+template <typename Key, typename Value>
+class HashMap {
+ public:
+  class Bucket {
+   public:
+    Key key;
+    Value value;
+
+   private:
+    // Bit i (i >= 0) in hopinfo is one iff the entry at distance i from this
+    // bucket maps to this bucket.
+
+   public:
+    struct hopinfo_t {
+      static constexpr size_t kNumHashfrags = 3;
+      static constexpr size_t kHashfragShift = 40;
+      union {
+        struct {
+          bool is_bitmap : 1;  // Starts with 0 = false
+          uint64_t bitmap : 63;
+        };
+
+        struct {
+          bool _is_bitmap : 1;  // Starts with 0 = false
+          uint8_t num_set;
+          uint8_t set_bit_loc[kNumHashfrags];
+          uint8_t hashfrag[kNumHashfrags];
+        };
+      };
+
+      inline bool is_set(size_t idx) const {
+        if (!is_bitmap) {
+          for (size_t i = 0; i < num_set; i++) {
+            if (set_bit_loc[i] == idx) return true;
+          }
+          return false;
+        }
+
+        // Just a bitmap
+        return (bitmap & (1ull << idx)) > 0;
+      }
+
+      inline bool is_set(size_t idx, size_t keyhash) const {
+        if (!is_bitmap) {
+          const uint8_t _hashfrag = (keyhash >> kHashfragShift);
+          for (size_t i = 0; i < num_set; i++) {
+            if (set_bit_loc[i] == idx && hashfrag[i] == _hashfrag) return true;
+          }
+          return false;
+        }
+
+        // Just a bitmap
+        return (bitmap & (1ull << idx)) > 0;
+      }
+
+      inline void set(size_t idx, size_t keyhash) {
+        if (!is_bitmap) {
+          if (num_set == kNumHashfrags) {
+            // Convert
+            const hopinfo_t hopinfo_copy = *this;
+            memset(this, 0, sizeof(hopinfo));
+
+            is_bitmap = true;
+            for (size_t i = 0; i < kNumHashfrags; i++) {
+              bitmap |= (1ull << hopinfo_copy.set_bit_loc[i]);
+            }
+          } else {
+            set_bit_loc[num_set] = idx;
+            hashfrag[num_set] = (keyhash >> kHashfragShift);
+            num_set++;
+            return;
+          }
+        }
+
+        // Just a bitmap
+        bitmap |= (1ull << idx);
+      }
+
+      inline void unset(size_t idx) {
+        if (!is_bitmap) {
+          hopinfo_t hopinfo_copy = *this;
+          memset(this, 0, sizeof(hopinfo));
+
+          for (size_t i = 0; i < hopinfo_copy.num_set; i++) {
+            if (hopinfo_copy.set_bit_loc[i] != idx) {
+              set_bit_loc[num_set] = hopinfo_copy.set_bit_loc[i];
+              hashfrag[num_set] = hopinfo_copy.hashfrag[i];
+              num_set++;
+            }
+          }
+          return;
+        }
+
+        // Just a bitmap
+        bitmap &= ~(1ull << idx);
+      }
+
+      inline size_t get_num_set() {
+        if (!is_bitmap) return num_set;
+        return __builtin_popcount(bitmap);
+      }
+
+      static void selftest() {
+        hopinfo_t x;
+        memset(&x, 0, sizeof(x));
+
+        x.set(33, 3ull << kHashfragShift);
+        assert(x.is_bitmap == false);
+        assert(x.num_set == 1);
+        assert(x.is_set(33));
+        assert(x.is_set(33, 3ull << kHashfragShift));
+        assert(!x.is_set(33, 4ull << kHashfragShift));
+
+        x.unset(33);
+        assert(x.is_bitmap == false);
+        assert(x.num_set == 0);
+        assert(!x.is_set(33));
+
+        x.set(33, 3ull << kHashfragShift);
+        x.set(34, 4ull << kHashfragShift);
+        x.set(35, 5ull << kHashfragShift);
+        assert(x.is_bitmap == false);
+        assert(x.num_set == 3);
+        assert(x.is_set(33));
+        assert(x.is_set(34));
+        assert(x.is_set(35));
+
+        x.unset(34);
+        assert(x.is_bitmap == false);
+        assert(x.num_set == 2);
+        assert(x.is_set(33));
+        assert(x.is_set(35));
+
+        x.set(36, 6ull << kHashfragShift);
+        x.set(37, 7ull << kHashfragShift);
+        assert(x.is_bitmap == true);
+        assert(x.is_set(33));
+        assert(x.is_set(35));
+        assert(x.is_set(36));
+        assert(x.is_set(37));
+
+        x.unset(33);
+        x.unset(35);
+        x.unset(36);
+        x.unset(37);
+        assert(x.is_bitmap == true);
+        assert(!x.is_set(33));
+        assert(!x.is_set(35));
+        assert(!x.is_set(36));
+        assert(!x.is_set(37));
+      }
+    } hopinfo;
+
+    static_assert(sizeof(hopinfo) == 8, "");
+    static_assert(sizeof(hopinfo) * 8 - 1 >= kBitmapSize, "");
+
+    Bucket(Key key, Value value) : key(key), value(value), hopinfo(0) {}
+    Bucket() {}
+
+    std::string to_string() {
+      char buf[1000];
+      sprintf(buf, "[key %zu, value %zu, hopinfo 0x%x]", key, value, hopinfo);
+      return std::string(buf);
+    }
+  };
+
+  // A redo log entry is committed iff its sequence number is less than or equal
+  // to the committed_seq_num.
+  class RedoLogEntry {
+   public:
+    size_t seq_num;  // Sequence number of this entry. Zero is invalid.
+    Key key;
+    Value value;
+
+    char padding[128 - (sizeof(seq_num) + sizeof(key) + sizeof(value))];
+
+    RedoLogEntry(size_t seq_num, const Key* key, const Value* value)
+        : seq_num(seq_num), key(*key), value(*value) {}
+    RedoLogEntry() {}
+  };
+
+  class RedoLog {
+   public:
+    RedoLogEntry entries[kNumRedoLogEntries];
+    size_t committed_seq_num;
+  };
+
+  // Initialize the persistent buffer for this hash table. This modifies only
+  // mapped_len.
+  uint8_t* map_pbuf(size_t& _mapped_len) const {
+    int is_pmem;
+    uint8_t* pbuf = reinterpret_cast<uint8_t*>(
+        pmem_map_file(pmem_file.c_str(), 0 /* length */, 0 /* flags */, 0666,
+                      &_mapped_len, &is_pmem));
+
+    rt_assert(pbuf != nullptr, "pmem_map_file() failed for " + pmem_file);
+    rt_assert(reinterpret_cast<size_t>(pbuf) % 256 == 0, "pbuf not aligned");
+
+    if (mapped_len - file_offset < reqd_space) {
+      fprintf(stderr,
+              "pmem file too small. %.2f GB required for hash table "
+              "(%zu buckets, bucket size = %zu), but only %.2f GB available\n",
+              reqd_space * 1.0 / (1ull << 30), num_buckets, sizeof(Bucket),
+              mapped_len * 1.0 / (1ull << 30));
+    }
+    rt_assert(is_pmem == 1, "File is not pmem");
+
+    return pbuf + file_offset;
+  }
+
+  HashMap(std::string pmem_file, size_t file_offset, size_t num_requested_keys)
+      : pmem_file(pmem_file),
+        file_offset(file_offset),
+        num_requested_keys(num_requested_keys),
+        num_buckets(rte_align64pow2(num_requested_keys)),
+        reqd_space(get_required_bytes(num_requested_keys)),
+        invalid_key(get_invalid_key()) {
+    rt_assert(num_requested_keys >= 1, ">=1 buckets needed");
+    rt_assert(file_offset % 256 == 0, "Unaligned file offset");
+
+    Bucket::hopinfo_t::selftest();
+
+    pbuf = map_pbuf(mapped_len);
+
+    // Set the committed seq num, and all redo log entry seq nums to zero.
+    redo_log = reinterpret_cast<RedoLog*>(pbuf);
+    pmem_memset_persist(redo_log, 0, sizeof(RedoLog));
+
+    // Initialize buckets
+    size_t bucket_offset = roundup<256>(sizeof(RedoLog));
+    buckets = reinterpret_cast<Bucket*>(&pbuf[bucket_offset]);
+
+    reset();
+  }
+
+  ~HashMap() {
+    if (pbuf != nullptr) pmem_unmap(pbuf - file_offset, mapped_len);
+  }
+
+  // Initialize the contents of both regular and extra buckets
+  void reset() {
+    double GB_to_memset = num_buckets * sizeof(Bucket) * 1.0 / (1ull << 30);
+    printf("Resetting hash table. This might take a while (~ %.1f seconds)\n",
+           GB_to_memset / 3.0);
+
+    pmem_memset_persist(&buckets[0], 0, num_buckets * sizeof(Bucket));
+  }
+
+  void prefetch(uint64_t key_hash) const {
+    if (!opts.prefetch) return;
+
+    size_t bucket_index = key_hash & (num_buckets - 1);
+    const Bucket* bucket = &buckets[bucket_index];
+
+    // Prefetching two cache lines seems to works best
+    __builtin_prefetch(bucket, 0, 0);
+    __builtin_prefetch(reinterpret_cast<const char*>(bucket) + 64, 0, 0);
+  }
+
+  // Batched operation that takes in both GETs and SETs. When this function
+  // returns, all SETs are persistent in the log.
+  //
+  // For GETs, value_arr slots contain results. For SETs, they contain the value
+  // to SET. This version of batch_op_drain assumes that the caller hash already
+  // issued prefetches.
+  void batch_op_drain_helper(bool* is_set, size_t* keyhash_arr,
+                             const Key** key_arr, Value** value_arr,
+                             bool* success_arr, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+      if (is_set[i]) {
+        success_arr[i] = set_nodrain(keyhash_arr[i], key_arr[i], value_arr[i]);
+      } else {
+        success_arr[i] = get(keyhash_arr[i], key_arr[i], value_arr[i]);
+      }
+    }
+  }
+
+  // Batched operation that takes in both GETs and SETs. When this function
+  // returns, all SETs are persistent in the log.
+  //
+  // For GETs, value_arr slots contain results. For SETs, they contain the value
+  // to SET. This version of batch_op_drain issues prefetches for the caller.
+  inline void batch_op_drain(bool* is_set, const Key** key_arr,
+                             Value** value_arr, bool* success_arr, size_t n) {
+    size_t keyhash_arr[kMaxBatchSize];
+
+    for (size_t i = 0; i < n; i++) {
+      keyhash_arr[i] = get_hash(key_arr[i]);
+      prefetch(keyhash_arr[i]);
+    }
+
+    batch_op_drain_helper(is_set, keyhash_arr, key_arr, value_arr, success_arr,
+                          n);
+  }
+
+  bool get(const Key* key, Value* out_value) {
+    assert(*key != invalid_key);
+    return get(get_hash(key), key, out_value);
+  }
+
+  bool get(size_t key_hash, const Key* key, Value* out_value) {
+    const size_t start_bkt_idx = key_hash & (num_buckets - 1);
+    Bucket* start_bkt = &buckets[start_bkt_idx];
+
+    if (kVerbose) {
+      printf("set: key %zu, bucket %zu\n", to_size_t_key(key), start_bkt_idx);
+    }
+
+    // In-place update if the key exists already
+    for (size_t i = 0; i < kBitmapSize; i++) {
+      if (start_bkt->hopinfo.is_set(i, key_hash)) {
+        stats.num_probes_for_get++;
+        Bucket* test_bkt = (start_bkt + i);
+        if (memcmp(key, &test_bkt->key, sizeof(Key)) == 0) {
+          *out_value = test_bkt->value;
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Set a key-value item without a final sfence
+  bool set_nodrain(const Key* key, const Value* value) {
+    assert(*key != invalid_key);
+    return set_nodrain(get_hash(key), key, value);
+  }
+
+  bool set_nodrain(size_t keyhash, const Key* key, const Value* value) {
+    const size_t start_bkt_idx = keyhash & (num_buckets - 1);
+    Bucket* start_bkt = &buckets[start_bkt_idx];
+
+    if (kVerbose) {
+      printf("set: key %zu, value %zu, bucket %zu\n", to_size_t_key(key),
+             to_size_t_val(value), start_bkt_idx);
+    }
+
+    // In-place update if the key exists already
+    for (size_t i = 0; i < kBitmapSize; i++) {
+      if (start_bkt->hopinfo.is_set(i, keyhash)) {
+        Bucket* test_bkt = (start_bkt + i);
+        if (memcmp(key, &test_bkt->key, sizeof(Key)) == 0) {
+          if (kVerbose) printf("  inserting at bucket %zu\n", start_bkt + i);
+          test_bkt->value = *value;
+          return true;
+        }
+      }
+    }
+
+    // Linear probing to find an empty bucket
+    Bucket* free_bkt = start_bkt;
+    for (size_t d_start_free = 0; d_start_free < kMaxDistance; d_start_free++) {
+      if (free_bkt->key == invalid_key) break;
+      free_bkt++;
+    }
+
+    if (free_bkt == start_bkt + kMaxDistance) {
+      if (kVerbose) printf("  free bucket over max distance. failing.\n");
+      return false;
+    }
+
+    while (true) {
+      if (free_bkt - start_bkt < kBitmapSize) {
+        if (kVerbose) {
+          printf("  finally using bucket %zu\n", free_bkt - buckets);
+        }
+
+        start_bkt->hopinfo.set(free_bkt - start_bkt, keyhash);
+        free_bkt->value = *value;
+        free_bkt->key = *key;
+        return true;
+      }
+
+      if (kVerbose) {
+        printf("  free bucket %zu too far.\n", free_bkt - buckets);
+      }
+
+      // Else, try to move free_bkt closer
+      Bucket* swap_bkt = nullptr;
+
+      // d_pivot_free = distance of free_bkt from pivot_bkt
+      for (size_t d_pivot_free = kBitmapSize - 1; d_pivot_free > 0;
+           d_pivot_free--) {
+        Bucket* pivot_bkt = free_bkt - d_pivot_free;
+
+        // Check if any entry in [pivot_bkt, ..., free_bkt - 1] maps to
+        // pivot_bkt. Such an entry can be moved to free_bkt.
+        for (size_t d_pivot_swap = 0; d_pivot_swap < d_pivot_free;
+             d_pivot_swap++) {
+          if (pivot_bkt->hopinfo.is_set(d_pivot_swap)) {
+            swap_bkt = pivot_bkt + d_pivot_swap;
+            break;
+          }
+        }
+
+        if (swap_bkt != nullptr) {
+          if (kVerbose) printf("  swap with bkt %zu\n", (swap_bkt - buckets));
+
+          // We found a swap
+          free_bkt->key = swap_bkt->key;
+          free_bkt->value = swap_bkt->value;
+
+          swap_bkt->key = invalid_key;
+
+          pivot_bkt->hopinfo.set(free_bkt - pivot_bkt,
+                                 get_hash(&free_bkt->key));
+          pivot_bkt->hopinfo.unset(swap_bkt - pivot_bkt);
+
+          free_bkt = swap_bkt;
+          break;
+        }
+      }  // End search over pivot buckets
+
+      if (swap_bkt == nullptr) {
+        // If no pivot bucket found, insert failed
+        if (kVerbose) printf("  no pivot bucket found\n");
+        return false;
+      }
+    }
+  }
+
+  /// Return the total bytes required for a table with \p num_requested_keys
+  /// keys. The returned space includes redo log. The returned space is aligned
+  /// to 256 bytes.
+  static size_t get_required_bytes(size_t num_requested_keys) {
+    size_t num_buckets = rte_align64pow2(num_requested_keys);
+    size_t tot_size =
+        sizeof(RedoLog) + (num_buckets + kMaxDistance) * sizeof(Bucket);
+    return roundup<256>(tot_size);
+  }
+
+  static size_t get_hash(const Key* k) {
+    return CityHash64(reinterpret_cast<const char*>(k), sizeof(Key));
+  }
+
+  static Key get_invalid_key() {
+    Key ret;
+    memset(&ret, 0, sizeof(ret));
+    return ret;
+  }
+
+  // Convert a key to a 64-bit value for printing
+  static size_t to_size_t_key(const Key* k) {
+    return *reinterpret_cast<const size_t*>(k);
+  }
+
+  // Convert a value to a 64-bit value for printing
+  static size_t to_size_t_val(const Value* v) {
+    return *reinterpret_cast<const size_t*>(v);
+  }
+
+  void print_buckets() const {
+    for (size_t i = 0; i < num_buckets; i++) {
+      printf("bucket %zu: %s\n", i, buckets[i].to_string().c_str());
+    }
+  }
+
+  void print_stats() const {
+    size_t num_keys = 0;
+    size_t distance_hist[kMaxDistance] = {0};
+    size_t hopinfo_bitcount_hist[kBitmapSize] = {0};
+
+    for (size_t i = 0; i < num_buckets; i++) {
+      Key k = buckets[i].key;
+      if (k != invalid_key) {
+        num_keys++;
+        size_t bucket_idx = get_hash(&k) & (num_buckets - 1);
+        assert(i - bucket_idx < kMaxDistance);
+
+        distance_hist[i - bucket_idx]++;
+        hopinfo_bitcount_hist[buckets[i].hopinfo.get_num_set()]++;
+      }
+    }
+
+    printf("hashmap stats:\n");
+    for (size_t d = 0; d < kMaxDistance; d++) {
+      if (distance_hist[d] == 0) continue;
+      printf("  distance %zu: %.8f\n", d, distance_hist[d] * 1.0 / num_keys);
+    }
+
+    for (size_t c = 0; c < kBitmapSize; c++) {
+      if (hopinfo_bitcount_hist[c] == 0) continue;
+      printf("  bitcount %zu: %.8f\n", c,
+             hopinfo_bitcount_hist[c] * 1.0 / num_keys);
+    }
+  }
+
+  // Constructor args
+  const std::string pmem_file;      // Name of the pmem file
+  const size_t file_offset;         // Offset in file where the table is placed
+  const size_t num_requested_keys;  // User's requested key capacity
+
+  const size_t num_buckets;  // Total buckets
+  const size_t reqd_space;   // Total bytes needed for the table
+  const Key invalid_key;
+
+  Bucket* buckets = nullptr;
+
+  uint8_t* pbuf;      // The pmem buffer for this table
+  size_t mapped_len;  // The length mapped by libpmem
+  RedoLog* redo_log;
+  size_t cur_sequence_number = 1;
+
+  struct {
+    bool prefetch = true;     // Software prefetching
+    bool redo_batch = true;   // Redo log batching
+    bool async_drain = true;  // Drain slot writes asynchronously
+
+    void reset() {
+      prefetch = true;
+      redo_batch = true;
+      async_drain = true;
+    }
+  } opts;
+
+  struct {
+    size_t num_probes_for_get = 0;
+  } stats;
+};
+
+}  // namespace phopscotch
