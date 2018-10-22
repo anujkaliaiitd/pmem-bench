@@ -51,7 +51,7 @@ TEST(Basic, Simple) {
 }
 
 TEST(Basic, Overload) {
-  size_t num_keys = 64 * 1024;
+  size_t num_keys = 1 * 1024 * 1024;
   phopscotch::HashMap<size_t, size_t> hashmap(kPmemFile, kDefaultFileOffset,
                                               num_keys);
 
@@ -69,6 +69,7 @@ TEST(Basic, Overload) {
   }
 
   printf("Loaded fraction = %.2f\n", max_key_inserted * 1.0 / num_keys);
+  hashmap.print_stats();
 
   for (size_t i = 1; i <= num_keys; i++) {
     size_t v;

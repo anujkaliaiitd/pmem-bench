@@ -15,7 +15,7 @@
 
 namespace phopscotch {
 
-static constexpr size_t kBitmapSize = 16;  // Neighborhood size
+static constexpr size_t kBitmapSize = 63;  // Neighborhood size
 
 // During insert(), we will look for an empty slot at most kMaxDistance away
 // from the key's hash bucket.
@@ -67,15 +67,27 @@ class HashMap {
     Key key;
     Value value;
 
+   private:
     // Bit i (i >= 0) in hopinfo is one iff the entry at distance i from this
     // bucket maps to this bucket.
     size_t hopinfo;
+
+   public:
+    /*struct {
+      uint64_t type : 1;
+
+    } hopinfo;
+    static_assert(sizeof(hopinfo) == 8, "");*/
+    static_assert(sizeof(hopinfo) * 8 >= kBitmapSize, "");
 
     Bucket(Key key, Value value) : key(key), value(value), hopinfo(0) {}
     Bucket() {}
 
     // Return true if bit #idx is set in hopinfo
     inline bool is_set(size_t idx) { return (hopinfo & (1ull << idx)) > 0; }
+    inline void set(size_t idx) { hopinfo |= (1ull << idx); }
+    inline void unset(size_t idx) { hopinfo &= ~(1ull << idx); }
+    inline size_t num_set() { return __builtin_popcount(hopinfo); }
 
     std::string to_string() {
       char buf[1000];
@@ -83,7 +95,6 @@ class HashMap {
       return std::string(buf);
     }
   };
-  static_assert(sizeof(Bucket::hopinfo) * 8 >= kBitmapSize, "");
 
   // A redo log entry is committed iff its sequence number is less than or equal
   // to the committed_seq_num.
@@ -218,17 +229,20 @@ class HashMap {
   }
 
   bool get(size_t key_hash, const Key* key, Value* out_value) const {
-    size_t bucket_idx = key_hash & (num_buckets - 1);
+    const size_t start_bkt_idx = key_hash & (num_buckets - 1);
+    Bucket* start_bkt = &buckets[start_bkt_idx];
 
     if (kVerbose) {
-      printf("get: key %zu, bucket_idx %zu\n", to_size_t_key(key), bucket_idx);
+      printf("set: key %zu, bucket %zu\n", to_size_t_key(key), start_bkt_idx);
     }
 
-    for (size_t i = bucket_idx; i < bucket_idx + kBitmapSize; i++) {
-      if (buckets[bucket_idx].is_set(i - bucket_idx)) {
-        if (memcmp(key, &buckets[i].key, sizeof(Key)) == 0) {
-          if (kVerbose) printf("  found at bucket %zu\n", i);
-          *out_value = buckets[i].value;
+    // In-place update if the key exists already
+    for (size_t i = 0; i < kBitmapSize; i++) {
+      if (start_bkt->is_set(i)) {
+        Bucket* test_bkt = (start_bkt + i);
+        if (memcmp(key, &test_bkt->key, sizeof(Key)) == 0) {
+          if (kVerbose) printf("  inserting at bucket %zu\n", start_bkt + i);
+          *out_value = test_bkt->value;
           return true;
         }
       }
@@ -281,7 +295,7 @@ class HashMap {
           printf("  finally using bucket %zu\n", free_bkt - buckets);
         }
 
-        start_bkt->hopinfo |= (1ull << (free_bkt - start_bkt));
+        start_bkt->set(free_bkt - start_bkt);
         free_bkt->value = *value;
         free_bkt->key = *key;
         return true;
@@ -318,8 +332,8 @@ class HashMap {
 
           swap_bkt->key = invalid_key;
 
-          pivot_bkt->hopinfo |= (1ull << (free_bkt - pivot_bkt));
-          pivot_bkt->hopinfo &= ~(1ull << (swap_bkt - pivot_bkt));
+          pivot_bkt->set(free_bkt - pivot_bkt);
+          pivot_bkt->unset(swap_bkt - pivot_bkt);
 
           free_bkt = swap_bkt;
           break;
@@ -367,6 +381,36 @@ class HashMap {
   void print_buckets() const {
     for (size_t i = 0; i < num_buckets; i++) {
       printf("bucket %zu: %s\n", i, buckets[i].to_string().c_str());
+    }
+  }
+
+  void print_stats() const {
+    size_t num_keys = 0;
+    size_t distance_hist[kMaxDistance] = {0};
+    size_t hopinfo_bitcount_hist[kBitmapSize] = {0};
+
+    for (size_t i = 0; i < num_buckets; i++) {
+      Key k = buckets[i].key;
+      if (k != invalid_key) {
+        num_keys++;
+        size_t bucket_idx = get_hash(&k) & (num_buckets - 1);
+        assert(i - bucket_idx < kMaxDistance);
+
+        distance_hist[i - bucket_idx]++;
+        hopinfo_bitcount_hist[buckets[i].num_set()]++;
+      }
+    }
+
+    printf("hashmap stats:\n");
+    for (size_t d = 0; d < kMaxDistance; d++) {
+      if (distance_hist[d] == 0) continue;
+      printf("  distance %zu: %.8f\n", d, distance_hist[d] * 1.0 / num_keys);
+    }
+
+    for (size_t c = 0; c < kBitmapSize; c++) {
+      if (hopinfo_bitcount_hist[c] == 0) continue;
+      printf("  bitcount %zu: %.8f\n", c,
+             hopinfo_bitcount_hist[c] * 1.0 / num_keys);
     }
   }
 

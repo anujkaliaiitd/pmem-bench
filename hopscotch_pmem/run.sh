@@ -1,10 +1,10 @@
 batch_size=16
-benchmark=5050
+benchmark=get
 sweep_optimizations=1
 pmem_file="/mnt/pmem12/raft_log"
 
 one_million=1048576  # Just a constant to adjust keys_total below
-keys_total=`expr 1024 \* $one_million`
+keys_total=`expr 64 \* $one_million`
 
 rm -rf /tmp/mica_bench*
 
