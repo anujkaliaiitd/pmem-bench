@@ -1,11 +1,10 @@
 #include "../common.h"
 #include "main.h"
 
-static constexpr bool kMeasurePercentiles = false;
-
 void bench_rand_read_latency(uint8_t *pbuf) {
   double freq_ghz = measure_rdtsc_freq();
 
+  static constexpr bool kMeasurePercentiles = false;
   static constexpr size_t kReadBytes = MB(128);
   static constexpr size_t kMinIters = 50000;
   static constexpr size_t kMinReadSz = 64;
