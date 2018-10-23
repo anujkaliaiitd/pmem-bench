@@ -1,6 +1,7 @@
-#include <city.h>
 #include "../common.h"
 #include "main.h"
+
+static constexpr bool kMeasurePercentiles = false;
 
 void bench_rand_read_latency(uint8_t *pbuf) {
   double freq_ghz = measure_rdtsc_freq();
@@ -33,31 +34,37 @@ void bench_rand_read_latency(uint8_t *pbuf) {
           kReadBytes / size <= kMinIters ? kMinIters : kReadBytes / size;
 
       for (size_t i = 0; i < num_iters; i++) {
-        size_t rand =
-            CityHash64(reinterpret_cast<char *>(&sum), sizeof(sum)) + pcg();
-
+        size_t rand = sum + pcg();
         file_offset = roundup<64>(rand % kPmemFileSize);
 
-        size_t start_tsc = timer::Start();
+        size_t start_tsc;
+        if (kMeasurePercentiles) start_tsc = timer::Start();
         memcpy(data, &pbuf[file_offset], size);
         for (size_t j = 0; j < size; j += 64) sum += data[j];
 
-        latency_vec.push_back(timer::Stop() - start_tsc);
+        if (kMeasurePercentiles) {
+          latency_vec.push_back(timer::Stop() - start_tsc);
+        }
       }
 
       size_t ns_avg_realtime = ns_since(start_time) / num_iters;
-      size_t ns_avg_rdtsc =
-          std::accumulate(latency_vec.begin(), latency_vec.end(), 0.0) /
-          (latency_vec.size() * freq_ghz);
-      verify_tsc_str << size << ": Average latency (ns) " << ns_avg_realtime
-                     << " (realtime) " << ns_avg_rdtsc << " (rdtsc) "
-                     << (ns_avg_realtime - ns_avg_rdtsc) << " (delta) "
-                     << "\n";
 
-      std::sort(latency_vec.begin(), latency_vec.end());
-      printf("%zu %zu %.1f %.1f\n", size, ns_avg_realtime,
-             latency_vec.at(num_iters * .50) / freq_ghz,
-             latency_vec.at(num_iters * .999) / freq_ghz);
+      if (kMeasurePercentiles) {
+        std::sort(latency_vec.begin(), latency_vec.end());
+        printf("%zu %zu %.1f %.1f\n", size, ns_avg_realtime,
+               latency_vec.at(num_iters * .50) / freq_ghz,
+               latency_vec.at(num_iters * .999) / freq_ghz);
+
+        size_t ns_avg_rdtsc =
+            std::accumulate(latency_vec.begin(), latency_vec.end(), 0.0) /
+            (latency_vec.size() * freq_ghz);
+        verify_tsc_str << size << ": Average latency (ns) " << ns_avg_realtime
+                       << " (realtime) " << ns_avg_rdtsc << " (rdtsc) "
+                       << (ns_avg_realtime - ns_avg_rdtsc) << " (delta) "
+                       << "\n";
+      } else {
+        printf("%zu %zu -1.0 -1.0\n", size, ns_avg_realtime);
+      }
     }
 
     printf("Fences verification:\n%s\n", verify_tsc_str.str().c_str());
