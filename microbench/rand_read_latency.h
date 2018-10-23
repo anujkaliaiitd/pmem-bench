@@ -18,7 +18,6 @@ void bench_rand_read_latency(uint8_t *pbuf) {
   latency_vec.reserve(kReadBytes / kMinReadSz);
 
   size_t sum = 0;
-  uint8_t *data = reinterpret_cast<uint8_t *>(memalign(4096, kMaxReadSz));
 
   for (size_t msr = 0; msr < 10; msr++) {
     printf("size avg_ns 50_ns 999_ns\n");
@@ -38,8 +37,9 @@ void bench_rand_read_latency(uint8_t *pbuf) {
 
         size_t start_tsc;
         if (kMeasurePercentiles) start_tsc = timer::Start();
-        memcpy(data, &pbuf[file_offset], size);
-        for (size_t j = 0; j < size; j += 64) sum += data[j];
+        for (size_t j = 0; j < size; j += 64) {
+          sum += pbuf[file_offset + j];
+        }
 
         if (kMeasurePercentiles) {
           latency_vec.push_back(timer::Stop() - start_tsc);
@@ -67,5 +67,6 @@ void bench_rand_read_latency(uint8_t *pbuf) {
     }
 
     printf("Fences verification:\n%s\n", verify_tsc_str.str().c_str());
+    printf("sum = %zu\n", sum);
   }
 }

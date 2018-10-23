@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <pcg/pcg_random.hpp>
+#include <random>
 
 static constexpr size_t kNumIters = 1000000;
 static constexpr size_t kFileSizeGB = 1024;
@@ -38,20 +40,17 @@ int main() {
   assert(mapped_len >= kFileSizeBytes);
   assert(is_pmem == 1);
 
-  uint64_t seed = 0xdeadbeef;
   size_t sum = 0;
+  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
 
-  for (size_t msr = 0; msr < 5; msr++) {
+  for (size_t msr = 0; msr < 10; msr++) {
     // Initialize measurement
     struct timespec bench_start;
     clock_gettime(CLOCK_REALTIME, &bench_start);
 
     // Real work
     for (size_t i = 0; i < kNumIters; i++) {
-      size_t rand_sample = fastrand(seed);
-      rand_sample = (rand_sample << 5);  // Ignore LSBs to get larger numbers
-
-      size_t file_offset = (sum + rand_sample) % kFileSizeBytes;
+      size_t file_offset = (sum + pcg()) % kFileSizeBytes;
       sum += pbuf[file_offset];  // Make the next read dependent
     }
 

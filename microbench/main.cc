@@ -75,8 +75,8 @@ int main(int argc, char **argv) {
   bench_func = "bench_rand_write_tput";
   bench_func = "bench_rand_read_tput";
   bench_func = "bench_seq_write_tput";
-  bench_func = "bench_rand_read_latency";
   bench_func = "bench_seq_write_latency";
+  bench_func = "bench_rand_read_latency";
 
   // Sequential write throughput
   if (bench_func == "bench_seq_write_tput") {
