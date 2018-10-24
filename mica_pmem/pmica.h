@@ -11,7 +11,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include "huge_alloc.h"
 
 namespace pmica {
 
@@ -138,7 +137,6 @@ class HashMap {
            reqd_space * 1.0 / (1ull << 30), get_key_capacity() / 1000000.0,
            sizeof(Bucket));
 
-    huge_alloc = new hugealloc::HugeAlloc(kNumaNode);
     pbuf = map_pbuf(mapped_len);
 
     // Set the committed seq num, and all redo log entry seq nums to zero.
@@ -169,7 +167,6 @@ class HashMap {
 
   ~HashMap() {
     if (pbuf != nullptr) pmem_unmap(pbuf - file_offset, mapped_len);
-    if (huge_alloc != nullptr) delete huge_alloc;
   }
 
   /// Return the total bytes required for a table with \p num_requested_keys
@@ -466,7 +463,6 @@ class HashMap {
   Bucket* extra_buckets_ = nullptr;
 
   std::vector<size_t> extra_bucket_free_list;
-  hugealloc::HugeAlloc* huge_alloc;
 
   uint8_t* pbuf;      // The pmem buffer for this table
   size_t mapped_len;  // The length mapped by libpmem
