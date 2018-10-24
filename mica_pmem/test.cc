@@ -4,10 +4,11 @@
 #include "pmica.h"
 
 static constexpr size_t kDefaultFileOffset = 1024;
+static constexpr const char* kPmemFile = "/mnt/pmem12/raft_log";
 
 TEST(Basic, Simple) {
   size_t num_keys = 32;
-  pmica::HashMap<size_t, size_t> hashmap("/dev/dax12.0", kDefaultFileOffset,
+  pmica::HashMap<size_t, size_t> hashmap(kPmemFile, kDefaultFileOffset,
                                          num_keys, 1.0);
 
   size_t key, value;
@@ -51,7 +52,7 @@ TEST(Basic, Simple) {
 
 TEST(Basic, Overload) {
   size_t num_keys = 32;
-  pmica::HashMap<size_t, size_t> hashmap("/dev/dax12.0", kDefaultFileOffset,
+  pmica::HashMap<size_t, size_t> hashmap(kPmemFile, kDefaultFileOffset,
                                          num_keys, 1.0);
 
   std::map<size_t, bool> insert_success_map;
@@ -75,7 +76,7 @@ TEST(Basic, Overload) {
 }
 
 TEST(Basic, Large) {
-  pmica::HashMap<size_t, size_t> hashmap("/dev/dax12.0", kDefaultFileOffset,
+  pmica::HashMap<size_t, size_t> hashmap(kPmemFile, kDefaultFileOffset,
                                          (1ull << 30), 0.2);
 
   size_t num_keys = 32;
@@ -99,7 +100,7 @@ TEST(Basic, Large) {
   }
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
