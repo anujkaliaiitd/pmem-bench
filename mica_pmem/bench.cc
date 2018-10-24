@@ -223,7 +223,7 @@ void sweep_do_one(HashMap *hashmap, size_t max_key, size_t batch_size,
                   Workload workload) {
   std::vector<double> tput_vec;
 
-  for (size_t i = 0; i < 10; i++) {
+  for (size_t msr = 0; msr < 3; msr++) {
     double tput;
     tput = batch_exp(hashmap, max_key, batch_size, workload, 0 /* thread_id */);
     tput_vec.push_back(tput);
@@ -250,16 +250,16 @@ void sweep_optimizations() {
 
   std::vector<size_t> batch_size_vec = {1, 4, 8, 16};
 
-  // GET batch sizes
-  for (auto &batch_size : batch_size_vec) {
-    printf("get. Batch size %zu\n", batch_size);
-    sweep_do_one(hashmap, max_key, batch_size, Workload::kGets);
-  }
-
   // SET batch sizes
   for (auto &batch_size : batch_size_vec) {
     printf("set. Batch size %zu\n", batch_size);
     sweep_do_one(hashmap, max_key, batch_size, Workload::kSets);
+  }
+
+  // GET batch sizes
+  for (auto &batch_size : batch_size_vec) {
+    printf("get. Batch size %zu\n", batch_size);
+    sweep_do_one(hashmap, max_key, batch_size, Workload::kGets);
   }
 
   // 50/50 batch sizes
