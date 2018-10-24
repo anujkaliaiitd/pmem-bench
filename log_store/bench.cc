@@ -8,6 +8,7 @@
 #include "log.h"
 
 static constexpr const char *kFileName = "/mnt/pmem12/raft_log";
+static constexpr size_t kNumMeasurements = 2;
 static constexpr size_t kNumIters = 1000000;
 
 int main() {
@@ -21,7 +22,7 @@ int main() {
 
   Counter ctr(pbuf, true /* create a new counter */);
 
-  for (size_t msr = 0; msr < 5; msr++) {
+  for (size_t msr = 0; msr < kNumMeasurements; msr++) {
     struct timespec bench_start;
     clock_gettime(CLOCK_REALTIME, &bench_start);
 
@@ -32,7 +33,7 @@ int main() {
            kNumIters / (bench_seconds * 1000000));
   }
 
-  for (size_t msr = 0; msr < 5; msr++) {
+  for (size_t msr = 0; msr < kNumMeasurements; msr++) {
     struct timespec bench_start;
     clock_gettime(CLOCK_REALTIME, &bench_start);
 
@@ -43,7 +44,7 @@ int main() {
            kNumIters / (bench_seconds * 1000000));
   }
 
-  for (size_t msr = 0; msr < 5; msr++) {
+  for (size_t msr = 0; msr < kNumMeasurements; msr++) {
     struct timespec bench_start;
     clock_gettime(CLOCK_REALTIME, &bench_start);
 

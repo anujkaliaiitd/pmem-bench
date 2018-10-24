@@ -41,7 +41,7 @@ class Counter {
     v_value++;
     pmem_memcpy_persist(&pbuf[buffer_idx * kBufferSize], &v_value,
                         sizeof(v_value));
-    buffer_idx = (buffer_idx + 1) % kBufferSize;
+    buffer_idx = (buffer_idx + 1) % kNumBuffers;
   }
 
   // Increment by writing to rotating locations, and do full-cacheline writes
@@ -51,7 +51,7 @@ class Counter {
     cacheline[0] = v_value;
 
     pmem_memcpy_persist(&pbuf[buffer_idx * kBufferSize], cacheline, 64);
-    buffer_idx = (buffer_idx + 1) % kBufferSize;
+    buffer_idx = (buffer_idx + 1) % kNumBuffers;
   }
 
   size_t v_value = 0;  // Volatile value
