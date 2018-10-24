@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include "../common.h"
-#include "log.h"
+#include "rotating_counter.h"
 
 static constexpr const char *kFileName = "/mnt/pmem12/raft_log";
 static constexpr size_t kNumMeasurements = 2;
@@ -39,6 +39,30 @@ void counter_only_bench(uint8_t *pbuf) {
            kNumIters / (bench_seconds * 1000000));
   }
 }
+
+class Log {
+ public:
+  // Assume pbuf is large enough to never overflow
+  Log(uint8_t *pbuf) {
+    ctr = Counter(pbuf, true /* create_new */);
+    log_base_addr = pbuf + Counter::get_reqd_space();
+  }
+
+  // Append with naive counter incrementing
+  void append_naive(uint8_t *data, size_t data_size) {
+    pmem_memcpy_persist(log_base_addr + ctr.v_value, data, data_size);
+    ctr.increment_naive(data_size);
+  }
+
+  // Append with rotating counter incrementing
+  void append_rotating(uint8_t *data, size_t data_size) {
+    pmem_memcpy_persist(log_base_addr + ctr.v_value, data, data_size);
+    ctr.increment_rotate(data_size);
+  }
+
+  Counter ctr;
+  uint8_t *log_base_addr = nullptr;  // Starting address of log contents on pmem
+};
 
 void log_bench(uint8_t *pbuf) {
   uint8_t source[kMaxLogDataSize] = {0};
