@@ -8,7 +8,7 @@
 #include <random>
 
 static constexpr size_t kNumIters = 1000000;
-static constexpr size_t kFileSizeGB = 1024;
+static constexpr size_t kFileSizeGB = 512;
 static constexpr size_t kFileSizeBytes = (1ull << 30) * kFileSizeGB;
 static constexpr const char *kPmemFile = "/mnt/pmem12/raft_log";
 

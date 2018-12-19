@@ -6,7 +6,7 @@
 #include "../common.h"
 
 static constexpr const char *kPmemFile = "/mnt/pmem12/raft_log";
-static constexpr size_t kPmemFileSizeGB = 1024;  // The expected file size
+static constexpr size_t kPmemFileSizeGB = 512;  // The expected file size
 static constexpr size_t kPmemFileSize = kPmemFileSizeGB * GB(1);
 static constexpr size_t kRandTemplateSz = GB(32);
 

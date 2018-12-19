@@ -6,6 +6,7 @@
 #include "rand_read_tput.h"
 #include "rand_write_latency.h"
 #include "rand_write_tput.h"
+#include "seq_read_tput.h"
 #include "seq_write_latency.h"
 #include "seq_write_tput.h"
 
@@ -65,6 +66,14 @@ int main(int argc, char **argv) {
   rt_assert(is_pmem == 1, "File is not pmem");
   printf("Mapped file of length %.2f GB\n", mapped_len * 1.0 / GB(1));
 
+  // Print some random file samples to check it's full of random contents
+  printf("File contents sample: ");
+  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
+  for (size_t i = 0; i < 10; i++) {
+    printf("%zu ", *reinterpret_cast<size_t *>(&pbuf[pcg() % kPmemFileSize]));
+  }
+  printf("\n");
+
   // map_in_file_by_page(pbuf);
   // map_in_file_whole(pbuf);
 
@@ -77,6 +86,7 @@ int main(int argc, char **argv) {
   bench_func = "bench_seq_write_tput";
   bench_func = "bench_seq_write_latency";
   bench_func = "bench_rand_read_latency";
+  bench_func = "bench_seq_read_tput";
 
   // Sequential write throughput
   if (bench_func == "bench_seq_write_tput") {
@@ -165,6 +175,23 @@ int main(int argc, char **argv) {
 
         for (size_t i = 0; i < num_threads; i++) threads[i].join();
       }
+    }
+  }
+
+  // Sequential read throughput
+  if (bench_func == "bench_seq_read_tput") {
+    std::vector<size_t> thread_count = {1, 2, 4, 8, 16, 24, 48};
+
+    for (size_t num_threads : thread_count) {
+      printf("Seq read tput with %zu threads\n", num_threads);
+      std::vector<std::thread> threads(num_threads);
+
+      for (size_t i = 0; i < num_threads; i++) {
+        threads[i] = std::thread(bench_seq_read_tput, pbuf, i, num_threads);
+        bind_to_core(threads[i], kNumaNode, i);
+      }
+
+      for (size_t i = 0; i < num_threads; i++) threads[i].join();
     }
   }
 
