@@ -1,5 +1,4 @@
-#include "../common.h"
-#include "main.h"
+#include "bench.h"
 
 void bench_seq_write_latency(uint8_t *pbuf) {
   double freq_ghz = measure_rdtsc_freq();

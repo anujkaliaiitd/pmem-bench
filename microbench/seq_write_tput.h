@@ -1,5 +1,4 @@
-#include "../common.h"
-#include "main.h"
+#include "bench.h"
 
 void bench_seq_write_tput(uint8_t *pbuf, size_t thread_id, size_t copy_sz,
                           double *avg_tput_GBps) {

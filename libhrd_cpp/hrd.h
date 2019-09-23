@@ -46,6 +46,8 @@ static constexpr size_t kHrdQPNameSize = 200;
 #define KB_(x) (KB(x) - 1)
 #define MB(x) (static_cast<size_t>(x) << 20)
 #define MB_(x) (MB(x) - 1)
+#define GB(x) (static_cast<size_t>(x) << 30)
+#define GB_(x) (GB(x) - 1)
 
 #define likely(x) __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
@@ -71,6 +73,13 @@ static constexpr inline T round_up(T x) {
   static_assert(is_power_of_two(power_of_two_number),
                 "PowerOfTwoNumber must be a power of 2");
   return ((x) + T(power_of_two_number - 1)) & (~T(power_of_two_number - 1));
+}
+
+/// Return seconds elapsed since timestamp \p t0
+static double sec_since(const struct timespec& t0) {
+  struct timespec t1;
+  clock_gettime(CLOCK_REALTIME, &t1);
+  return (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1.0 / 1000000000;
 }
 
 /// Return nanoseconds elapsed since timestamp \p t0

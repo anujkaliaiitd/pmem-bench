@@ -1,3 +1,8 @@
+/**
+ * @file bench.h
+ * @brief Common code shared by benchmark implementations in header files
+ */
+
 #pragma once
 
 #include <errno.h>
@@ -12,7 +17,9 @@
 #include <pcg/pcg_random.hpp>
 #include <sstream>
 #include <thread>
+
 #include "../common.h"
+#include "../utils/timer.h"
 
 DEFINE_uint64(num_threads, 0, "Number of threads");
 

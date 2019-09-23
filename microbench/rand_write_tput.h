@@ -1,5 +1,4 @@
-#include "../common.h"
-#include "main.h"
+#include "bench.h"
 
 void bench_rand_write_tput(uint8_t *pbuf, size_t thread_id, size_t copy_sz,
                            size_t num_threads) {

@@ -1,5 +1,4 @@
-#include "main.h"
-#include "../common.h"
+#include "bench.h"
 
 // Benchmark impl
 #include "rand_read_latency.h"
@@ -98,7 +97,7 @@ int main(int argc, char **argv) {
 
     for (size_t copy_sz = 64; copy_sz <= GB(1); copy_sz *= 2) {
       dat_header << std::to_string(copy_sz) << " ";
-      double avg_tput_GBps[FLAGS_num_threads];
+      std::vector<double> avg_tput_GBps(FLAGS_num_threads);
 
       std::vector<std::thread> threads(FLAGS_num_threads);
       for (size_t i = 0; i < FLAGS_num_threads; i++) {
