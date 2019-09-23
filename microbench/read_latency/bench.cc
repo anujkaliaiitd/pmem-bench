@@ -7,10 +7,14 @@
 #include <pcg/pcg_random.hpp>
 #include <random>
 
+#include <sys/types.h>
+#include <unistd.h>
+
 static constexpr size_t kNumIters = 1000000;
 static constexpr size_t kFileSizeGB = 512;
 static constexpr size_t kFileSizeBytes = (1ull << 30) * kFileSizeGB;
-static constexpr const char *kPmemFile = "/mnt/pmem12/raft_log";
+// static constexpr const char *kPmemFile = "/mnt/pmem12/raft_log";
+static constexpr const char *kPmemFile = "/dev/dax0.0";
 
 inline uint32_t fastrand(uint64_t &seed) {
   seed = seed * 1103515245 + 12345;
@@ -32,6 +36,15 @@ struct cacheline_t {
 static_assert(sizeof(cacheline_t) == 64, "");
 
 int main() {
+  if (getuid() != 0) {
+    // Mapping devdax files needs root perms for now
+    printf("You need to be root to run this benchmark\n");
+    exit(-1);
+  }
+
+  printf("Measuring random read latency with buffer size = %zu GB\n",
+         kFileSizeGB);
+
   size_t mapped_len;
   int is_pmem;
   uint8_t *pbuf = reinterpret_cast<uint8_t *>(
@@ -59,9 +72,10 @@ int main() {
            sum);
   }
 
-  // Shuffle-based measurement here
+  // The measurement above uses implicit pointer chasing. We can instead use
+  // a shuffle to create an explicit pointer chain.
+
   /*
-   *
   auto *cl_arr = reinterpret_cast<cacheline_t *>(pbuf);
   const size_t num_cl = kFileSizeBytes / sizeof(cacheline_t);
   for (size_t i = 0; i < num_cl; i++) {
