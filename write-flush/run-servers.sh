@@ -6,7 +6,7 @@ source $(dirname $0)/../scripts/mlx_env.sh
 export HRD_REGISTRY_IP="192.168.18.2"
 
 drop_shm
-exe="../build/write-flush"
+exe="./write-flush"
 chmod +x $exe
 
 blue "Reset server QP registry"
@@ -19,10 +19,10 @@ echo "Server: memcached server is open for business on port 11211"
 
 # Check for non-gdb mode
 if [ "$#" -eq 0 ]; then
-  numactl --physcpubind=0 --membind=0 $exe --is_client 0
+  sudo -E numactl --physcpubind=0 --membind=0 $exe --is_client 0
 fi
 
 # Check for gdb mode
 if [ "$#" -eq 1 ]; then
-  gdb -ex run --args $exe --is_client 0
+  sudo -E gdb -ex run --args $exe --is_client 0
 fi

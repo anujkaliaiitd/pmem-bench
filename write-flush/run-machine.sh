@@ -6,7 +6,7 @@ source $(dirname $0)/../scripts/mlx_env.sh
 export HRD_REGISTRY_IP="192.168.18.2"
 
 drop_shm
-exe="../build/write-flush"
+exe="./write-flush"
 chmod +x $exe
 
 # Check number of arguments

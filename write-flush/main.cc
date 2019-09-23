@@ -9,8 +9,8 @@
 #include <random>
 #include <thread>
 #include <vector>
+#include "../libhrd_cpp/hrd.h"
 #include "latency.h"
-#include "libhrd_cpp/hrd.h"
 
 DEFINE_uint64(is_client, 0, "Is this process a client?");
 
