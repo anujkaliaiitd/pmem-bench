@@ -6,12 +6,15 @@
 #pragma once
 
 #include <errno.h>
+#include <fcntl.h>
 #include <gflags/gflags.h>
 #include <libpmem.h>
 #include <malloc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <iomanip>
 #include <pcg/pcg_random.hpp>
@@ -23,7 +26,9 @@
 
 DEFINE_uint64(num_threads, 0, "Number of threads");
 
-static constexpr const char *kPmemFile = "/mnt/pmem12/raft_log";
+// static constexpr const char *kPmemFile = "/mnt/pmem12/raft_log";
+static constexpr const char *kPmemFile = "/dev/dax0.0";
+
 static constexpr size_t kPmemFileSizeGB = 512;  // The expected file size
 static constexpr size_t kPmemFileSize = kPmemFileSizeGB * GB(1);
 

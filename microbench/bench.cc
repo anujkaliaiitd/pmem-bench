@@ -9,8 +9,8 @@
 #include "seq_write_latency.h"
 #include "seq_write_tput.h"
 
-// Write to the whole file to "map it in", whatever that means
-void map_in_file_whole(uint8_t *pbuf) {
+// Write to the whole buffer to "map it in", whatever that means
+void map_in_buffer_whole(uint8_t *pbuf) {
   printf("Writing to the whole file for map-in...\n");
   const size_t chunk_sz = GB(16);
   rt_assert(kPmemFileSize % chunk_sz == 0, "Invalid chunk size for map-in");
@@ -26,8 +26,8 @@ void map_in_file_whole(uint8_t *pbuf) {
   printf("Done writing.\n");
 }
 
-// Write to a byte in each page of the file, to map the pages in
-void map_in_file_by_page(uint8_t *pbuf) {
+// Write to a byte in each page of the buffer, to map the pages in
+void map_in_buffer_by_page(uint8_t *pbuf) {
   printf("Mapping-in file pages.\n");
   struct timespec start;
   clock_gettime(CLOCK_REALTIME, &start);
@@ -42,6 +42,43 @@ void map_in_file_by_page(uint8_t *pbuf) {
   }
 
   printf("Done mapping-in.\n");
+}
+
+// Map kPmemFile. Works for both devdax (i.e., kPmemFile contains "/dev/dax")
+// and fsdax mode.
+uint8_t *map_pmem_file_or_devdax() {
+  if (std::string(kPmemFile).find("dax") != std::string::npos) {
+    // devdax mode: use regular mmap
+    int fd = open(kPmemFile, O_RDWR);
+    rt_assert(fd >= 0, "devdax open failed");
+    rt_assert(kPmemFileSize % MB(2) == 0);
+
+    void *buf =
+        mmap(nullptr, kPmemFileSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    rt_assert(buf != MAP_FAILED, "mmap failed for devdax");
+    rt_assert(reinterpret_cast<size_t>(buf) % 256 == 0);
+
+    return reinterpret_cast<uint8_t *>(buf);
+  } else {
+    // fsdax mode: use pmem_map_file
+    uint8_t *pbuf;
+    size_t mapped_len;
+    int is_pmem;
+
+    pbuf = reinterpret_cast<uint8_t *>(pmem_map_file(
+        kPmemFile, 0 /* length */, 0 /* flags */, 0666, &mapped_len, &is_pmem));
+
+    rt_assert(pbuf != nullptr,
+              "pmem_map_file() failed. " + std::string(strerror(errno)));
+    rt_assert(mapped_len >= kPmemFileSize,
+              "pmem file too small " + std::to_string(mapped_len));
+    rt_assert(reinterpret_cast<size_t>(pbuf) % 4096 == 0,
+              "Mapped buffer isn't page-aligned");
+    rt_assert(is_pmem == 1, "File is not pmem");
+    printf("Mapped file of length %.2f GB\n", mapped_len * 1.0 / GB(1));
+
+    return pbuf;
+  }
 }
 
 int main(int argc, char **argv) {
@@ -73,19 +110,19 @@ int main(int argc, char **argv) {
   }
   printf("\n");
 
-  // map_in_file_by_page(pbuf);
-  // map_in_file_whole(pbuf);
+  // map_in_buffer_by_page(pbuf);
+  // map_in_buffer_whole(pbuf);
 
   std::string bench_func;  // Last one wins
   bench_func = "bench_seq_write_tput";
   bench_func = "bench_seq_read_latency";
   bench_func = "bench_rand_write_latency";
-  bench_func = "bench_rand_write_tput";
   bench_func = "bench_rand_read_tput";
   bench_func = "bench_seq_write_tput";
   bench_func = "bench_seq_write_latency";
   bench_func = "bench_rand_read_latency";
   bench_func = "bench_seq_read_tput";
+  bench_func = "bench_rand_write_tput";
 
   // Sequential write throughput
   if (bench_func == "bench_seq_write_tput") {

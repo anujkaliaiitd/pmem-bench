@@ -22,7 +22,7 @@ void bench_rand_write_tput(uint8_t *pbuf, size_t thread_id, size_t copy_sz,
       size_t offset[kBatchSize];
       for (size_t j = 0; j < kBatchSize; j++) {
         offset[j] = base_addr + (pcg() % bytes_per_thread);
-        offset[j] = roundup<64>(offset[j]);
+        offset[j] = roundup<256>(offset[j]);
         if (offset[j] + copy_sz >= kPmemFileSize) {
           j--;
           continue;
@@ -34,7 +34,9 @@ void bench_rand_write_tput(uint8_t *pbuf, size_t thread_id, size_t copy_sz,
 
     double tot_sec = sec_since(start);
     double rate = kNumIters / tot_sec;
-    printf("Thread %zu of %zu, size %zu: random write tput = %.2f M/sec\n",
-           thread_id, num_threads, copy_sz, rate / 1000000);
+    double tput_GBps = kNumIters * copy_sz / (1000000000 * tot_sec);
+
+    printf("Thread %zu of %zu, size %zu: rand writes: (%.2f M/s, %.2f GB/s)\n",
+           thread_id, num_threads, copy_sz, rate / 1000000, tput_GBps);
   }
 }
