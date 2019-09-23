@@ -3,12 +3,11 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/types.h>
 #include <time.h>
+#include <unistd.h>
 #include <pcg/pcg_random.hpp>
 #include <random>
-
-#include <sys/types.h>
-#include <unistd.h>
 
 static constexpr size_t kNumIters = 1000000;
 static constexpr size_t kFileSizeGB = 512;

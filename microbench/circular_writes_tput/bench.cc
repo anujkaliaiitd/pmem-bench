@@ -3,7 +3,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/types.h>
 #include <time.h>
+#include <unistd.h>
 #include "config.h"
 
 // Config parameters:
@@ -12,10 +14,16 @@
 // kNumBuffers: We have kNumBuffers buffers of size kBufferSize
 static_assert(kBufferSize >= kWriteSize, "");
 
-static constexpr const char *kFileName = "/mnt/pmem12/raft_log";
-static constexpr size_t kNumIters = 1000000;
+// static constexpr const char *kFileName = "/mnt/pmem12/raft_log";
+static constexpr const char *kFileName = "/dev/dax0.0";
+static constexpr size_t kNumIters = 10000000;
 
 int main() {
+  if (getuid() != 0) {
+    printf("You need to be root to run this benchmark\n");
+    exit(-1);
+  }
+
   size_t data[kBufferSize / sizeof(size_t)] = {0};
 
   size_t mapped_len;
