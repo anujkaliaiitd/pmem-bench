@@ -26,6 +26,9 @@ static constexpr size_t kClientWriteSize = MB(64);
 static constexpr bool kUsePmem = true;
 static constexpr const char* kPmemFile = "/dev/dax0.0";
 
+// If true, we use read-after-write to force persistence
+static constexpr bool kReadAfterWrite = true;
+
 // Map the devdax buffer at the server
 uint8_t* get_pmem_buf_server() {
   int fd = open(kPmemFile, O_RDWR);
@@ -115,16 +118,16 @@ void client_func(size_t global_thread_id) {
 
   hrd_wait_till_ready("server");
 
-  struct ibv_send_wr write_wr, *bad_send_wr;
-  struct ibv_sge write_sge;
+  struct ibv_send_wr write_wr, read_wr, *bad_send_wr;
+  struct ibv_sge write_sge, read_sge;
   struct ibv_wc wc;
   size_t total_bytes_written = 0;
   struct timespec start;
 
-  printf("#thread_id write_size_MB bandwidth_GBps\n");  // Stats header
   while (true) {
     if (total_bytes_written == 0) clock_gettime(CLOCK_REALTIME, &start);
 
+    // RDMA-write kClientWriteSize bytes
     write_sge.addr = reinterpret_cast<uint64_t>(&cb->conn_buf[0]);
     write_sge.length = kClientWriteSize;
     write_sge.lkey = cb->conn_buf_mr->lkey;
@@ -132,22 +135,38 @@ void client_func(size_t global_thread_id) {
     write_wr.opcode = IBV_WR_RDMA_WRITE;
     write_wr.num_sge = 1;
     write_wr.sg_list = &write_sge;
-    write_wr.send_flags = IBV_SEND_SIGNALED; /* unsignaled */
+    write_wr.send_flags = kReadAfterWrite ? 0 : IBV_SEND_SIGNALED;
 
     write_wr.wr.rdma.remote_addr =
         srv_qp->buf_addr + global_thread_id * kClientWriteSize;
     write_wr.wr.rdma.rkey = srv_qp->rkey;
-    write_wr.next = nullptr;
+    write_wr.next = kReadAfterWrite ? &read_wr : nullptr;
+
+    if (kReadAfterWrite) {
+      // RDMA-read 8 bytes from the end of the written buffer
+      read_sge.addr = reinterpret_cast<uint64_t>(&cb->conn_buf[0]);
+      read_sge.length = sizeof(size_t);
+      read_sge.lkey = cb->conn_buf_mr->lkey;
+
+      read_wr.opcode = IBV_WR_RDMA_READ;
+      read_wr.num_sge = 1;
+      read_wr.sg_list = &read_sge;
+      read_wr.send_flags = IBV_SEND_SIGNALED;
+      read_wr.wr.rdma.remote_addr =
+          write_wr.wr.rdma.remote_addr + kClientWriteSize - sizeof(size_t);
+      read_wr.wr.rdma.rkey = srv_qp->rkey;
+      read_wr.next = nullptr;
+    }
 
     int ret = ibv_post_send(cb->conn_qp[0], &write_wr, &bad_send_wr);
     rt_assert(ret == 0);
-    hrd_poll_cq(cb->conn_cq[0], 1, &wc);  // Block till the write completes
+    hrd_poll_cq(cb->conn_cq[0], 1, &wc);  // Block till the read completes
     total_bytes_written += kClientWriteSize;
 
     // Our bandwidth is around 6 GB/s across all clients. Print ~once per sec.
     if (total_bytes_written >= GB(6) / FLAGS_num_threads) {
       double sec = sec_since(start);
-      printf("%zu, %.2f %.2f\n", global_thread_id,
+      printf("Thread %zu: %.2f MB per write, %.2f GB/s\n", global_thread_id,
              kClientWriteSize * 1.0 / MB(1),
              total_bytes_written * 1.0 / (GB(1) * sec));
 
