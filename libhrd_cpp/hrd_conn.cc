@@ -49,7 +49,7 @@ struct hrd_ctrl_blk_t* hrd_ctrl_blk_init(size_t local_hid, size_t port_index,
 
   // Connected QPs
   if (conn_config != nullptr) {
-    assert(conn_config->buf_size <= MB(1024));
+    assert(conn_config->buf_size <= GB(32));
     if (conn_config->prealloc_buf != nullptr) {
       assert(conn_config->buf_shm_key == -1);
     }
@@ -63,7 +63,7 @@ struct hrd_ctrl_blk_t* hrd_ctrl_blk_init(size_t local_hid, size_t port_index,
     cb->dgram_buf_size = dgram_config->buf_size;
     cb->dgram_buf_shm_key = dgram_config->buf_shm_key;
 
-    assert(cb->dgram_buf_size <= MB(1024));
+    assert(cb->dgram_buf_size <= GB(32));
     if (dgram_config->prealloc_buf != nullptr) {
       assert(cb->dgram_buf_shm_key == -1);
     }

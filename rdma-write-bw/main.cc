@@ -12,18 +12,26 @@
 #include "../libhrd_cpp/hrd.h"
 
 DEFINE_uint64(is_client, 0, "Is this process a client?");
+DEFINE_uint64(num_clients, 1, "Maximum number of clients (for server)");
+DEFINE_uint64(num_threads, 1, "Number of threads to run (for clients)");
+DEFINE_uint64(machine_id, 0, "Index among client machines (for clients)");
 
-static constexpr size_t kBufSize = MB(1);  // Registered buffer size
+// Size of the buffer registered at the server
+static constexpr size_t kServerBufSize = GB(4);
+
+// Size of RDMA writes issued by each client
+static constexpr size_t kClientWriteSize = MB(64);
 
 // If true, we use a devdax-mapped buffer. If false, we use DRAM hugepages.
 static constexpr bool kUsePmem = true;
 static constexpr const char* kPmemFile = "/dev/dax0.0";
 
-uint8_t* get_pmem_buf() {
+// Map the devdax buffer at the server
+uint8_t* get_pmem_buf_server() {
   int fd = open(kPmemFile, O_RDWR);
   rt_assert(fd >= 0, "devdax open failed");
 
-  size_t pmem_size = round_up<MB(2)>(kBufSize);  // Smaller sizes may fail
+  size_t pmem_size = round_up<MB(2)>(kServerBufSize);  // Smaller sizes may fail
   void* buf =
       mmap(nullptr, pmem_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   rt_assert(buf != MAP_FAILED, "mmap failed for devdax");
@@ -33,60 +41,75 @@ uint8_t* get_pmem_buf() {
   return reinterpret_cast<uint8_t*>(buf);
 }
 
-void run_server() {
+void server_func() {
+  rt_assert(kServerBufSize >= kClientWriteSize * FLAGS_num_clients,
+            "Server buffer too small to accommodate all clients");
   uint8_t* pmem_buf = nullptr;
-  if (kUsePmem) pmem_buf = get_pmem_buf();
+  if (kUsePmem) pmem_buf = get_pmem_buf_server();
 
   struct hrd_conn_config_t conn_config;
-  conn_config.num_qps = 1;
+  conn_config.num_qps = FLAGS_num_clients;
   conn_config.use_uc = false;
   conn_config.prealloc_buf = kUsePmem ? pmem_buf : nullptr;
-  conn_config.buf_size = kBufSize;
+  conn_config.buf_size = kServerBufSize;
   conn_config.buf_shm_key = kUsePmem ? -1 : 3185;
 
   auto* cb = hrd_ctrl_blk_init(0 /* id */, 0 /* port */, 0 /* numa */,
                                &conn_config, nullptr /* dgram config */);
-  memset(const_cast<uint8_t*>(cb->conn_buf), 0, kBufSize);
+  memset(const_cast<uint8_t*>(cb->conn_buf), 0, kServerBufSize);
 
-  hrd_publish_conn_qp(cb, 0, "server");
-  printf("main: Server published. Waiting for client.\n");
-
-  hrd_qp_attr_t* clt_qp = nullptr;
-  while (clt_qp == nullptr) {
-    clt_qp = hrd_get_published_qp("client");
-    if (clt_qp == nullptr) usleep(200000);
+  for (size_t i = 0; i < FLAGS_num_clients; i++) {
+    auto srv_qp_name = std::string("server-") + std::to_string(i);
+    hrd_publish_conn_qp(cb, i, srv_qp_name.c_str());
   }
 
-  printf("main: Server %s found client! Connecting..\n", "server");
-  hrd_connect_qp(cb, 0, clt_qp);
+  printf("main: Server published. Waiting for client.\n");
+
+  for (size_t i = 0; i < FLAGS_num_clients; i++) {
+    auto clt_qp_name = std::string("client-") + std::to_string(i);
+    hrd_qp_attr_t* clt_qp = nullptr;
+    while (clt_qp == nullptr) {
+      clt_qp = hrd_get_published_qp(clt_qp_name.c_str());
+      if (clt_qp == nullptr) {
+        usleep(200000);
+        continue;
+      }
+
+      printf("main: Server found client %zu! Connecting..\n", i);
+      hrd_connect_qp(cb, i, clt_qp);
+    }
+  }
+
   hrd_publish_ready("server");
   printf("main: Server ready. Going to sleep.\n");
 
   while (true) sleep(1);
 }
 
-void run_client() {
+void client_func(size_t global_thread_id) {
   hrd_conn_config_t conn_config;
   conn_config.num_qps = 1;
   conn_config.use_uc = false;
   conn_config.prealloc_buf = nullptr;
-  conn_config.buf_size = kBufSize;
-  conn_config.buf_shm_key = 3185;
+  conn_config.buf_size = kClientWriteSize;
+  conn_config.buf_shm_key = 3185 + global_thread_id;
 
   auto* cb = hrd_ctrl_blk_init(0 /* id */, 0 /* port */, 0 /* numa */,
                                &conn_config, nullptr /* dgram config */);
-  memset(const_cast<uint8_t*>(cb->conn_buf), 31, kBufSize);
+  memset(const_cast<uint8_t*>(cb->conn_buf), 31, kClientWriteSize);
 
-  hrd_publish_conn_qp(cb, 0, "client");
-  printf("main: Client published. Waiting for server.\n");
+  auto clt_qp_name = std::string("client-") + std::to_string(global_thread_id);
+  hrd_publish_conn_qp(cb, 0, clt_qp_name.c_str());
+  printf("main: Client %zu published. Waiting for server.\n", global_thread_id);
 
+  auto srv_qp_name = std::string("server-") + std::to_string(global_thread_id);
   hrd_qp_attr_t* srv_qp = nullptr;
   while (srv_qp == nullptr) {
-    srv_qp = hrd_get_published_qp("server");
+    srv_qp = hrd_get_published_qp(srv_qp_name.c_str());
     if (srv_qp == nullptr) usleep(2000);
   }
 
-  printf("main: Client found server. Connecting..\n");
+  printf("main: Client %zu found server. Connecting..\n", global_thread_id);
   hrd_connect_qp(cb, 0, srv_qp);
   printf("main: Client connected!\n");
 
@@ -95,40 +118,57 @@ void run_client() {
   struct ibv_send_wr write_wr, *bad_send_wr;
   struct ibv_sge write_sge;
   struct ibv_wc wc;
-  size_t num_iters = 0;
+  size_t total_bytes_written = 0;
+  struct timespec start;
 
-  printf("#write_size_GB bandwidth_GBps\n");  // Stats header
+  printf("#thread_id write_size_MB bandwidth_GBps\n");  // Stats header
   while (true) {
-    struct timespec start;
-    clock_gettime(CLOCK_REALTIME, &start);
+    if (total_bytes_written == 0) clock_gettime(CLOCK_REALTIME, &start);
 
     write_sge.addr = reinterpret_cast<uint64_t>(&cb->conn_buf[0]);
-    write_sge.length = kBufSize;
+    write_sge.length = kClientWriteSize;
     write_sge.lkey = cb->conn_buf_mr->lkey;
 
     write_wr.opcode = IBV_WR_RDMA_WRITE;
     write_wr.num_sge = 1;
     write_wr.sg_list = &write_sge;
     write_wr.send_flags = IBV_SEND_SIGNALED; /* unsignaled */
-    ;
 
-    write_wr.wr.rdma.remote_addr = srv_qp->buf_addr;
+    write_wr.wr.rdma.remote_addr =
+        srv_qp->buf_addr + global_thread_id * kClientWriteSize;
     write_wr.wr.rdma.rkey = srv_qp->rkey;
     write_wr.next = nullptr;
 
     int ret = ibv_post_send(cb->conn_qp[0], &write_wr, &bad_send_wr);
     rt_assert(ret == 0);
     hrd_poll_cq(cb->conn_cq[0], 1, &wc);  // Block till the write completes
-    num_iters++;
+    total_bytes_written += kClientWriteSize;
 
-    double sec = sec_since(start);
-    printf("%.2f %.2f\n", kBufSize * 1.0 / GB(1),
-           kBufSize * 1.0 / (GB(1) * sec));
+    // Our bandwidth is around 6 GB/s across all clients. Print ~once per sec.
+    if (total_bytes_written >= GB(6) / FLAGS_num_threads) {
+      double sec = sec_since(start);
+      printf("%zu, %.2f %.2f\n", global_thread_id,
+             kClientWriteSize * 1.0 / MB(1),
+             total_bytes_written * 1.0 / (GB(1) * sec));
+
+      total_bytes_written = 0;
+    }
   }
 }
 
 int main(int argc, char* argv[]) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  FLAGS_is_client == 1 ? run_client() : run_server();
-  return 0;
+  if (FLAGS_is_client == 1) {
+    std::vector<std::thread> client_threads(FLAGS_num_threads);
+
+    for (size_t i = 0; i < FLAGS_num_threads; i++) {
+      size_t global_thread_id = (FLAGS_machine_id * FLAGS_num_threads) + i;
+      client_threads[i] = std::thread(client_func, global_thread_id);
+    }
+
+    for (size_t i = 0; i < FLAGS_num_threads; i++) client_threads[i].join();
+  } else {
+    auto t = std::thread(server_func);
+    t.join();
+  }
 }
