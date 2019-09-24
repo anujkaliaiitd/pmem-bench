@@ -19,7 +19,7 @@ if [ "$#" -eq 0 ]; then
 fi
 
 machine_id=$1
-num_threads=24
+num_threads=1
 
 drop_shm
 exe="./write-bw"

@@ -1,5 +1,6 @@
 #include <fcntl.h>
 #include <gflags/gflags.h>
+#include <libpmem.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,7 +28,7 @@ static constexpr bool kUsePmem = true;
 static constexpr const char* kPmemFile = "/dev/dax0.0";
 
 // If true, we use read-after-write to force persistence
-static constexpr bool kReadAfterWrite = true;
+static constexpr bool kReadAfterWrite = false;
 
 // Map the devdax buffer at the server
 uint8_t* get_pmem_buf_server() {
@@ -39,7 +40,6 @@ uint8_t* get_pmem_buf_server() {
       mmap(nullptr, pmem_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   rt_assert(buf != MAP_FAILED, "mmap failed for devdax");
   rt_assert(reinterpret_cast<size_t>(buf) % 256 == 0);
-  memset(buf, 0, pmem_size);
 
   return reinterpret_cast<uint8_t*>(buf);
 }
@@ -59,8 +59,17 @@ void server_func() {
 
   auto* cb = hrd_ctrl_blk_init(0 /* id */, 0 /* port */, 0 /* numa */,
                                &conn_config, nullptr /* dgram config */);
-  memset(const_cast<uint8_t*>(cb->conn_buf), 0, kServerBufSize);
 
+  // Fill in the persistent buffer, also sanity-check local write throughput
+  printf("main: Zero-ing pmem buffer\n");
+  struct timespec start;
+  clock_gettime(CLOCK_REALTIME, &start);
+  pmem_memset_persist(const_cast<uint8_t*>(cb->conn_buf), 0, kServerBufSize);
+  printf("main: Zero-ed %f MB of pmem at %.1f GB/s\n",
+         kServerBufSize * 1.0 / MB(1),
+         kServerBufSize / (1000000000.0 * sec_since(start)));
+
+  // Publish server QPs
   for (size_t i = 0; i < FLAGS_num_clients; i++) {
     auto srv_qp_name = std::string("server-") + std::to_string(i);
     hrd_publish_conn_qp(cb, i, srv_qp_name.c_str());
@@ -123,10 +132,9 @@ void client_func(size_t global_thread_id) {
   struct ibv_wc wc;
   size_t total_bytes_written = 0;
   struct timespec start;
+  clock_gettime(CLOCK_REALTIME, &start);
 
   while (true) {
-    if (total_bytes_written == 0) clock_gettime(CLOCK_REALTIME, &start);
-
     // RDMA-write kClientWriteSize bytes
     write_sge.addr = reinterpret_cast<uint64_t>(&cb->conn_buf[0]);
     write_sge.length = kClientWriteSize;
@@ -163,14 +171,14 @@ void client_func(size_t global_thread_id) {
     hrd_poll_cq(cb->conn_cq[0], 1, &wc);  // Block till the read completes
     total_bytes_written += kClientWriteSize;
 
-    // Our bandwidth is around 6 GB/s across all clients. Print ~once per sec.
-    if (total_bytes_written >= GB(6) / FLAGS_num_threads) {
-      double sec = sec_since(start);
+    double sec_elapsed = sec_since(start);
+    if (sec_elapsed >= 1.0) {
       printf("Thread %zu: %.2f MB per write, %.2f GB/s\n", global_thread_id,
              kClientWriteSize * 1.0 / MB(1),
-             total_bytes_written * 1.0 / (GB(1) * sec));
+             total_bytes_written * 1.0 / (GB(1) * sec_elapsed));
 
       total_bytes_written = 0;
+      clock_gettime(CLOCK_REALTIME, &start);
     }
   }
 }
