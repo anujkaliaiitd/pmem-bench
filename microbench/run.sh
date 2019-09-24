@@ -11,10 +11,10 @@ fi
 
 # Check for non-gdb mode
 if [ "$#" -eq 0 ]; then
-  numactl --cpunodebind=0 --membind=0 $exe --num_threads=$num_threads
+  sudo -E numactl --cpunodebind=0 --membind=0 $exe --num_threads=$num_threads
 fi
 
 # Check for gdb mode
 if [ "$#" -eq 1 ]; then
-  gdb -ex run --args $exe --num_threads=$num_threads
+  sudo -E gdb -ex run --args $exe --num_threads=$num_threads
 fi
