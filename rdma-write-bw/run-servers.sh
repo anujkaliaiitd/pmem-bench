@@ -5,8 +5,9 @@ source $(dirname $0)/../scripts/mlx_env.sh
 #export HRD_REGISTRY_IP="akalianode-1.rdma.fawn.apt.emulab.net"
 export HRD_REGISTRY_IP="192.168.18.2"
 
-num_clients=1
+num_clients=24
 
+blue "Dropping SHM regions"
 drop_shm
 exe="./write-bw"
 chmod +x $exe

@@ -3,7 +3,7 @@
 void bench_rand_write_tput(uint8_t *pbuf, size_t thread_id, size_t copy_sz,
                            size_t num_threads) {
   static constexpr size_t kBatchSize = 8;
-  static constexpr size_t kNumIters = MB(4);
+  static constexpr size_t kNumIters = GB(64);
 
   // Write to non-overlapping addresses
   const size_t bytes_per_thread = kPmemFileSize / num_threads;
@@ -15,7 +15,7 @@ void bench_rand_write_tput(uint8_t *pbuf, size_t thread_id, size_t copy_sz,
   auto *copy_arr = new uint8_t[copy_sz];
   for (size_t i = 0; i < copy_sz; i++) copy_arr[i] = pcg();
 
-  for (size_t iter = 0; iter < 5; iter++) {
+  for (size_t iter = 0; iter < 1; iter++) {
     clock_gettime(CLOCK_REALTIME, &start);
 
     for (size_t i = 0; i < kNumIters / kBatchSize; i++) {

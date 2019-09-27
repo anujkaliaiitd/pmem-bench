@@ -10,10 +10,8 @@ function blue() {
 
 # Drop all SHM
 function drop_shm() {
-	for i in $(ipcs -m | awk '{ print $1; }'); do
-		if [[ $i =~ 0x.* ]]; then
-			sudo ipcrm -M $i 2>/dev/null
-		fi
+	for i in $(ipcs -m | awk '{ print $2; }'); do
+		sudo ipcrm -m $i 2>/dev/null
 	done
 }
 

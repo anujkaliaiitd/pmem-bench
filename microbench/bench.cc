@@ -166,8 +166,8 @@ int main(int argc, char **argv) {
 
   // Random write tput
   if (bench_func == "bench_rand_write_tput") {
-    std::vector<size_t> thread_count = {1, 2, 4, 8, 16, 24};
-    std::vector<size_t> copy_sz_vec = {64, 256};
+    std::vector<size_t> thread_count = {1};
+    std::vector<size_t> copy_sz_vec = {256};
 
     for (size_t copy_sz : copy_sz_vec) {
       for (size_t num_threads : thread_count) {
