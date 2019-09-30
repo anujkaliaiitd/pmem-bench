@@ -19,7 +19,7 @@ if [ "$#" -eq 0 ]; then
 fi
 
 machine_id=$1
-num_threads=24
+num_threads=1
 
 drop_shm
 exe="./write-bw"
@@ -28,11 +28,11 @@ chmod +x $exe
 # Check for non-gdb mode
 if [ "$#" -eq 1 ]; then
   sudo -E numactl --physcpubind=0 --membind=0 $exe --is_client 1 \
-    --machine_id $machine_id --num_threads $num_threads
+    --machine_id $machine_id $(cat config)
 fi
 
 # Check for gdb mode
 if [ "$#" -eq 2 ]; then
   sudo -E gdb -ex run --args $exe --is_client 1 \
-    --machine_id $machine_id --num_threads $num_threads
+    --machine_id $machine_id $(cat config)
 fi

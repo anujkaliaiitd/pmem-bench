@@ -13,9 +13,10 @@
 #include "../libhrd_cpp/hrd.h"
 
 DEFINE_uint64(is_client, 0, "Is this process a client?");
-DEFINE_uint64(num_clients, 1, "Maximum number of clients (for server)");
-DEFINE_uint64(num_threads, 1, "Number of threads to run (for clients)");
 DEFINE_uint64(machine_id, 0, "Index among client machines (for clients)");
+DEFINE_uint64(num_client_processes, 1, "Number of client processes");
+DEFINE_uint64(num_threads_per_client, 1, "Threads per client process");
+DEFINE_uint64(num_qps_per_client_thread, 1, "QPs per client thread");
 
 // Size of the buffer registered at the server
 static constexpr size_t kServerBufSize = GB(4);
@@ -45,13 +46,17 @@ uint8_t* get_pmem_buf_server() {
 }
 
 void server_func() {
-  rt_assert(kServerBufSize >= kClientWriteSize * FLAGS_num_clients,
-            "Server buffer too small to accommodate all clients");
+  size_t num_client_connections = FLAGS_num_client_processes *
+                                  FLAGS_num_threads_per_client *
+                                  FLAGS_num_qps_per_client_thread;
+
+  rt_assert(kServerBufSize >= kClientWriteSize * num_client_connections,
+            "Server buffer too small to accommodate all client connections");
   uint8_t* pmem_buf = nullptr;
   if (kUsePmem) pmem_buf = get_pmem_buf_server();
 
   struct hrd_conn_config_t conn_config;
-  conn_config.num_qps = FLAGS_num_clients;
+  conn_config.num_qps = num_client_connections;
   conn_config.use_uc = false;
   conn_config.prealloc_buf = kUsePmem ? pmem_buf : nullptr;
   conn_config.buf_size = kServerBufSize;
@@ -70,14 +75,15 @@ void server_func() {
          kServerBufSize / (1000000000.0 * sec_since(start)));
 
   // Publish server QPs
-  for (size_t i = 0; i < FLAGS_num_clients; i++) {
+  for (size_t i = 0; i < num_client_connections; i++) {
     auto srv_qp_name = std::string("server-") + std::to_string(i);
     hrd_publish_conn_qp(cb, i, srv_qp_name.c_str());
   }
 
-  printf("main: Server published. Waiting for client.\n");
+  printf("main: Server published. Waiting for %zu client connections.\n",
+         num_client_connections);
 
-  for (size_t i = 0; i < FLAGS_num_clients; i++) {
+  for (size_t i = 0; i < num_client_connections; i++) {
     auto clt_qp_name = std::string("client-") + std::to_string(i);
     hrd_qp_attr_t* clt_qp = nullptr;
     while (clt_qp == nullptr) {
@@ -87,7 +93,7 @@ void server_func() {
         continue;
       }
 
-      printf("main: Server found client %zu! Connecting..\n", i);
+      printf("main: Server found client connection %zu! Connecting..\n", i);
       hrd_connect_qp(cb, i, clt_qp);
     }
   }
@@ -186,14 +192,15 @@ void client_func(size_t global_thread_id) {
 int main(int argc, char* argv[]) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   if (FLAGS_is_client == 1) {
-    std::vector<std::thread> client_threads(FLAGS_num_threads);
+    std::vector<std::thread> client_threads(FLAGS_num_threads_per_client);
 
-    for (size_t i = 0; i < FLAGS_num_threads; i++) {
-      size_t global_thread_id = (FLAGS_machine_id * FLAGS_num_threads) + i;
+    for (size_t i = 0; i < client_threads.size(); i++) {
+      size_t global_thread_id =
+          (FLAGS_machine_id * FLAGS_num_threads_per_client) + i;
       client_threads[i] = std::thread(client_func, global_thread_id);
     }
 
-    for (size_t i = 0; i < FLAGS_num_threads; i++) client_threads[i].join();
+    for (size_t i = 0; i < client_threads.size(); i++) client_threads[i].join();
   } else {
     auto t = std::thread(server_func);
     t.join();

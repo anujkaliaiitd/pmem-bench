@@ -5,8 +5,6 @@ source $(dirname $0)/../scripts/mlx_env.sh
 #export HRD_REGISTRY_IP="akalianode-1.rdma.fawn.apt.emulab.net"
 export HRD_REGISTRY_IP="192.168.18.2"
 
-num_clients=24
-
 blue "Dropping SHM regions"
 drop_shm
 exe="./write-bw"
@@ -22,10 +20,11 @@ echo "Server: memcached server is open for business on port 11211"
 
 # Check for non-gdb mode
 if [ "$#" -eq 0 ]; then
-  sudo -E numactl --physcpubind=0 --membind=0 $exe --is_client 0 --num_clients $num_clients
+  sudo -E numactl --physcpubind=0 --membind=0 $exe \
+    --is_client 0 $(cat config)
 fi
 
 # Check for gdb mode
 if [ "$#" -eq 1 ]; then
-  sudo -E gdb -ex run --args $exe --is_client 0 --num_clients $num_clients
+  sudo -E gdb -ex run --args $exe --is_client 0 $(cat config)
 fi
