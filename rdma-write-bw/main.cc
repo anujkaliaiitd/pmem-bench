@@ -31,12 +31,14 @@ static constexpr const char* kPmemFile = "/dev/dax0.0";
 // If true, we use read-after-write to force persistence
 static constexpr bool kReadAfterWrite = false;
 
+static constexpr bool kVerbose = false;
+
 // Map the devdax buffer at the server
 uint8_t* get_pmem_buf_server() {
   int fd = open(kPmemFile, O_RDWR);
   rt_assert(fd >= 0, "devdax open failed");
 
-  size_t pmem_size = round_up<MB(2)>(kServerBufSize);  // Smaller sizes may fail
+  size_t pmem_size = roundup<MB(2)>(kServerBufSize);  // Smaller sizes may fail
   void* buf =
       mmap(nullptr, pmem_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   rt_assert(buf != MAP_FAILED, "mmap failed for devdax");
@@ -108,6 +110,8 @@ void server_func() {
 
 void client_func(size_t global_thread_id) {
   hrd_conn_config_t conn_config;
+  FastRand fast_rand;
+
   conn_config.num_qps = FLAGS_num_qps_per_client_thread;
   conn_config.use_uc = false;
   conn_config.prealloc_buf = nullptr;
@@ -124,9 +128,9 @@ void client_func(size_t global_thread_id) {
     size_t global_conn_id =
         global_thread_id * FLAGS_num_qps_per_client_thread + i;
     auto conn_name = std::string("conn-") + std::to_string(global_conn_id);
-    hrd_publish_conn_qp(cb, 0, conn_name.c_str());
-    printf("main: Connection %zu published. Waiting for server.\n",
-           global_thread_id);
+    hrd_publish_conn_qp(cb, i, conn_name.c_str());
+    printf("main: Connection %s published. Waiting for server.\n",
+           conn_name.c_str());
 
     auto srv_qp_name = std::string("server-") + std::to_string(global_conn_id);
     srv_qps[i] = nullptr;
@@ -135,8 +139,8 @@ void client_func(size_t global_thread_id) {
       if (srv_qps[i] == nullptr) usleep(2000);
     }
 
-    printf("main: Found server for connection %zu. Connecting..\n",
-           global_thread_id);
+    printf("main: Found server for connection %s. Connecting..\n",
+           conn_name.c_str());
     hrd_connect_qp(cb, i, srv_qps[i]);
     printf("main: Client connected!\n");
   }
@@ -146,6 +150,7 @@ void client_func(size_t global_thread_id) {
   std::vector<bool> pending_vec(FLAGS_num_qps_per_client_thread, false);
   struct timespec start;
   size_t total_bytes_written = 0;
+  std::vector<size_t> bytes_per_qp(FLAGS_num_qps_per_client_thread, 0);
   clock_gettime(CLOCK_REALTIME, &start);
 
   while (true) {
@@ -156,6 +161,7 @@ void client_func(size_t global_thread_id) {
 
       size_t global_conn_id =
           global_thread_id * FLAGS_num_qps_per_client_thread + i;
+      _unused(global_conn_id);
 
       struct ibv_send_wr write_wr, read_wr, *bad_send_wr;
       struct ibv_sge write_sge, read_sge;
@@ -170,8 +176,10 @@ void client_func(size_t global_thread_id) {
       write_wr.sg_list = &write_sge;
       write_wr.send_flags = kReadAfterWrite ? 0 : IBV_SEND_SIGNALED;
 
-      write_wr.wr.rdma.remote_addr =
-          srv_qps[i]->buf_addr + global_conn_id * kClientWriteSize;
+      size_t offset =
+          fast_rand.next_u32() % (kServerBufSize - kClientWriteSize);
+      offset = roundup<kClientWriteSize>(offset);
+      write_wr.wr.rdma.remote_addr = srv_qps[i]->buf_addr + offset;
       write_wr.wr.rdma.rkey = srv_qps[i]->rkey;
       write_wr.next = kReadAfterWrite ? &read_wr : nullptr;
 
@@ -191,6 +199,11 @@ void client_func(size_t global_thread_id) {
         read_wr.next = nullptr;
       }
 
+      if (kVerbose) {
+        printf("Client thread %zu posted transaction on QP %zu\n",
+               global_thread_id, i);
+      }
+
       int ret = ibv_post_send(cb->conn_qp[i], &write_wr, &bad_send_wr);
       rt_assert(ret == 0);
 
@@ -199,20 +212,41 @@ void client_func(size_t global_thread_id) {
 
     // Now poll. At this point, all QPs have operations pending
     for (size_t i = 0; i < FLAGS_num_qps_per_client_thread; i++) {
-      if (pending_vec[i]) continue;
-
       struct ibv_wc wc;
       int new_comps = ibv_poll_cq(cb->conn_cq[i], 1, &wc);
       if (new_comps == 0) continue;
 
+      if (wc.status != 0) {
+        fprintf(stderr, "Bad wc status %s on connection %zu\n",
+                ibv_wc_status_str(wc.status), i);
+        exit(-1);
+      }
+
+      if (kVerbose) {
+        printf("Client thread %zu completed transaction on connection %zu\n",
+               global_thread_id, i);
+      }
+
       pending_vec[i] = false;
       total_bytes_written += kClientWriteSize;
+      bytes_per_qp[i] += kClientWriteSize;
     }
 
     double sec_elapsed = sec_since(start);
     if (sec_elapsed >= 1.0) {
-      printf("Thread %zu: %.2f MB per write, %.2f GB/s\n", global_thread_id,
-             kClientWriteSize * 1.0 / MB(1),
+      std::ostringstream fraction_per_qp_str;
+      fraction_per_qp_str << "[";
+      for (size_t i = 0; i < FLAGS_num_qps_per_client_thread; i++) {
+        fraction_per_qp_str
+            << std::to_string(bytes_per_qp[i] * 1.0 / total_bytes_written)
+            << (i == FLAGS_num_qps_per_client_thread - 1 ? "" : ", ");
+        bytes_per_qp[i] = 0;
+      }
+      fraction_per_qp_str << "]";
+
+      printf("Thread %zu: %.2f MB per write (fractions/conn: %s). %.2f GB/s.\n",
+             global_thread_id, kClientWriteSize * 1.0 / MB(1),
+             fraction_per_qp_str.str().c_str(),
              total_bytes_written * 1.0 / (GB(1) * sec_elapsed));
 
       total_bytes_written = 0;

@@ -20,6 +20,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include "../common.h"
 
 static constexpr size_t kRoCE = false;  ///< Use RoCE
 
@@ -41,53 +42,6 @@ static constexpr size_t kHrdQPNameSize = 200;
 // This needs to be a macro because we don't have Mellanox OFED for Debian
 #define kHrdMlx5Atomics false
 #define kHrdReservedNamePrefix "__HRD_RESERVED_NAME_PREFIX"
-
-#define KB(x) (static_cast<size_t>(x) << 10)
-#define KB_(x) (KB(x) - 1)
-#define MB(x) (static_cast<size_t>(x) << 20)
-#define MB_(x) (MB(x) - 1)
-#define GB(x) (static_cast<size_t>(x) << 30)
-#define GB_(x) (GB(x) - 1)
-
-#define likely(x) __builtin_expect(!!(x), 1)
-#define unlikely(x) __builtin_expect(!!(x), 0)
-#define _unused(x) ((void)(x))  // Make production build happy
-
-/// Check a condition at runtime. If the condition is false, throw exception.
-static inline void rt_assert(bool condition, std::string throw_str) {
-  if (unlikely(!condition)) throw std::runtime_error(throw_str);
-}
-
-/// Check a condition at runtime. If the condition is false, throw exception.
-static inline void rt_assert(bool condition) {
-  if (unlikely(!condition)) throw std::runtime_error("");
-}
-
-template <typename T>
-static constexpr inline bool is_power_of_two(T x) {
-  return x && ((x & T(x - 1)) == 0);
-}
-
-template <uint64_t power_of_two_number, typename T>
-static constexpr inline T round_up(T x) {
-  static_assert(is_power_of_two(power_of_two_number),
-                "PowerOfTwoNumber must be a power of 2");
-  return ((x) + T(power_of_two_number - 1)) & (~T(power_of_two_number - 1));
-}
-
-/// Return seconds elapsed since timestamp \p t0
-static double sec_since(const struct timespec& t0) {
-  struct timespec t1;
-  clock_gettime(CLOCK_REALTIME, &t1);
-  return (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1.0 / 1000000000;
-}
-
-/// Return nanoseconds elapsed since timestamp \p t0
-static double ns_since(const struct timespec& t0) {
-  struct timespec t1;
-  clock_gettime(CLOCK_REALTIME, &t1);
-  return (t1.tv_sec - t0.tv_sec) * 1000000000.0 + (t1.tv_nsec - t0.tv_nsec);
-}
 
 /// Registry info about a QP
 struct hrd_qp_attr_t {
