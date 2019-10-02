@@ -20,7 +20,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
-#include "../common.h"
+#include "../../common.h"
 
 static constexpr size_t kRoCE = false;  ///< Use RoCE
 

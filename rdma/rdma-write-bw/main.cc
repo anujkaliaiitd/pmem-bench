@@ -21,6 +21,9 @@ DEFINE_uint64(num_qps_per_client_thread, 1, "QPs per client thread");
 // Size of the buffer registered at the server
 static constexpr size_t kServerBufSize = GB(4);
 
+// If true, server zeroes out its buffer and reports write throughput
+static constexpr bool kZeroServerBuf = true;
+
 // Size of RDMA writes issued by each client
 static constexpr size_t kClientWriteSize = MB(64);
 
@@ -59,13 +62,15 @@ void server_func() {
     pmem_buf = get_pmem_buf_server();
 
     // Fill in the persistent buffer, also sanity-check local write throughput
-    printf("main: Zero-ing pmem buffer\n");
-    struct timespec start;
-    clock_gettime(CLOCK_REALTIME, &start);
-    pmem_memset_persist(pmem_buf, 0, kServerBufSize);
-    printf("main: Zero-ed %f MB of pmem at %.1f GB/s\n",
-           kServerBufSize * 1.0 / MB(1),
-           kServerBufSize / (1000000000.0 * sec_since(start)));
+    if (kZeroServerBuf) {
+      printf("main: Zero-ing pmem buffer\n");
+      struct timespec start;
+      clock_gettime(CLOCK_REALTIME, &start);
+      pmem_memset_persist(pmem_buf, 0, kServerBufSize);
+      printf("main: Zero-ed %f MB of pmem at %.1f GB/s\n",
+             kServerBufSize * 1.0 / MB(1),
+             kServerBufSize / (1000000000.0 * sec_since(start)));
+    }
   }
 
   struct hrd_conn_config_t conn_config;

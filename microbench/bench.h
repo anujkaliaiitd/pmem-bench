@@ -29,8 +29,7 @@ DEFINE_uint64(num_threads, 0, "Number of threads");
 // static constexpr const char *kPmemFile = "/mnt/pmem12/raft_log";
 static constexpr const char *kPmemFile = "/dev/dax0.0";
 
-static constexpr size_t kPmemFileSizeGB = 128;  // The expected file size
-static constexpr size_t kPmemFileSize = kPmemFileSizeGB * GB(1);
+static constexpr size_t kPmemFileSize = GB(128);
 
 static constexpr bool kMeasureLatency = false;
 double freq_ghz = 0.0;

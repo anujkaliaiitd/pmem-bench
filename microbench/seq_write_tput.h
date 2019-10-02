@@ -13,7 +13,6 @@ void bench_seq_write_tput(uint8_t *pbuf, size_t thread_id, size_t copy_sz,
 
   // Each thread write to non-overlapping addresses
   const size_t excl_bytes_per_thread = kPmemFileSize / FLAGS_num_threads;
-  rt_assert(excl_bytes_per_thread >= kCopyPerThreadPerMsr);
   const size_t base_offset = roundup<256>(thread_id * excl_bytes_per_thread);
 
   // We begin copies from a random aligned offset in the file. This prevents
@@ -39,8 +38,8 @@ void bench_seq_write_tput(uint8_t *pbuf, size_t thread_id, size_t copy_sz,
 
     double tot_sec = sec_since(start);
     double tput_GBps = kCopyPerThreadPerMsr / (tot_sec * 1000000000);
-    printf("Thread %zu: copy_sz %zu, %.2f GB/s\n", thread_id, copy_sz,
-           tput_GBps);
+    printf("Thread %zu: copy_sz %zu, %.2f GB/s. Offset = %zu\n", thread_id,
+           copy_sz, tput_GBps, offset);
     tput_sum_GBps += tput_GBps;
   }
 
