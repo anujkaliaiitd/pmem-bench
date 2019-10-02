@@ -1,6 +1,6 @@
---num_client_threads 1
---dual_port 0
---use_uc 0
+--num_client_processes 1
+--num_threads_per_client 4
+--use_uc 1
 --size 32
 --postlist 4
 --do_read 0
