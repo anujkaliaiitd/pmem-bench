@@ -1,0 +1,6 @@
+--num_client_threads 1
+--dual_port 0
+--use_uc 0
+--size 32
+--postlist 4
+--do_read 0
