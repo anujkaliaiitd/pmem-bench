@@ -1,0 +1,3 @@
+--num_client_processes 1
+--num_threads_per_client 1
+--num_qps_per_client_thread 1
