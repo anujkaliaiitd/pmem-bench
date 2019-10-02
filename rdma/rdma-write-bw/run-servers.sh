@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-source $(dirname $0)/../scripts/utils.sh
-source $(dirname $0)/../scripts/mlx_env.sh
+source $(dirname $0)/../../scripts/utils.sh
+source $(dirname $0)/../../scripts/mlx_env.sh
 #export HRD_REGISTRY_IP="fawn-pluto0"
 #export HRD_REGISTRY_IP="akalianode-1.rdma.fawn.apt.emulab.net"
 export HRD_REGISTRY_IP="192.168.18.2"
@@ -20,7 +20,7 @@ echo "Server: memcached server is open for business on port 11211"
 
 # Check for non-gdb mode
 if [ "$#" -eq 0 ]; then
-  sudo -E numactl --physcpubind=0 --membind=0 $exe \
+  sudo -E numactl --cpunodebind=0 --membind=0 $exe \
     --is_client 0 $(cat config)
 fi
 

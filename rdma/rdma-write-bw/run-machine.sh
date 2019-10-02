@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-source $(dirname $0)/../scripts/utils.sh
-source $(dirname $0)/../scripts/mlx_env.sh
+source $(dirname $0)/../../scripts/utils.sh
+source $(dirname $0)/../../scripts/mlx_env.sh
 #export HRD_REGISTRY_IP="fawn-pluto0"
 #export HRD_REGISTRY_IP="akalianode-1.rdma.fawn.apt.emulab.net"
 export HRD_REGISTRY_IP="192.168.18.2"
@@ -19,7 +19,6 @@ if [ "$#" -eq 0 ]; then
 fi
 
 machine_id=$1
-num_threads=1
 
 drop_shm
 exe="./write-bw"
