@@ -17,15 +17,23 @@ DEFINE_uint64(machine_id, 0, "Index among client machines (for clients)");
 DEFINE_uint64(num_client_processes, 1, "Number of client processes");
 DEFINE_uint64(num_threads_per_client, 1, "Threads per client process");
 DEFINE_uint64(num_qps_per_client_thread, 1, "QPs per client thread");
+DEFINE_uint64(server_buf_size_GB, 1, "Buffer size at server in GB");
 
-// Size of the buffer registered at the server
-static constexpr size_t kServerBufSize = GB(4);
+// Access patterns:
+//
+// * Sequential: A client writes the entirety of its exlusive buffer (called
+//   "extent") with kClientWriteSize writes
+// * Repeated: A client writes to only the initial kClientWriteSize bytes of
+//   its exclusive buffer
+// * Random: A client chooses a random offset in the whole server buffer
+DEFINE_string(client_access_pattern, "sequential",
+              "Client's access pattern (sequential/repeated/random)");
 
 // If true, server zeroes out its buffer and reports write throughput
-static constexpr bool kZeroServerBuf = true;
+static constexpr bool kZeroServerBuf = false;
 
 // Size of RDMA writes issued by each client
-static constexpr size_t kClientWriteSize = MB(64);
+static constexpr size_t kClientWriteSize = MB(1);
 
 // If true, we use a devdax-mapped buffer. If false, we use DRAM hugepages.
 static constexpr bool kUsePmem = true;
@@ -41,7 +49,8 @@ uint8_t* get_pmem_buf_server() {
   int fd = open(kPmemFile, O_RDWR);
   rt_assert(fd >= 0, "devdax open failed");
 
-  size_t pmem_size = roundup<MB(2)>(kServerBufSize);  // Smaller sizes may fail
+  size_t pmem_size =
+      roundup<MB(2)>(GB(FLAGS_server_buf_size_GB));  // Smaller sizes may fail
   void* buf =
       mmap(nullptr, pmem_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   rt_assert(buf != MAP_FAILED, "mmap failed for devdax");
@@ -55,8 +64,10 @@ void server_func() {
                                   FLAGS_num_threads_per_client *
                                   FLAGS_num_qps_per_client_thread;
 
-  rt_assert(kServerBufSize >= kClientWriteSize * num_client_connections,
-            "Server buffer too small to accommodate all client connections");
+  rt_assert(
+      GB(FLAGS_server_buf_size_GB) >= kClientWriteSize * num_client_connections,
+      "Server buffer too small to accommodate all client connections");
+
   uint8_t* pmem_buf = nullptr;
   if (kUsePmem) {
     pmem_buf = get_pmem_buf_server();
@@ -66,10 +77,10 @@ void server_func() {
       printf("main: Zero-ing pmem buffer\n");
       struct timespec start;
       clock_gettime(CLOCK_REALTIME, &start);
-      pmem_memset_persist(pmem_buf, 0, kServerBufSize);
+      pmem_memset_persist(pmem_buf, 0, GB(FLAGS_server_buf_size_GB));
       printf("main: Zero-ed %f MB of pmem at %.1f GB/s\n",
-             kServerBufSize * 1.0 / MB(1),
-             kServerBufSize / (1000000000.0 * sec_since(start)));
+             GB(FLAGS_server_buf_size_GB) * 1.0 / MB(1),
+             GB(FLAGS_server_buf_size_GB) / (1000000000.0 * sec_since(start)));
     }
   }
 
@@ -77,7 +88,7 @@ void server_func() {
   conn_config.num_qps = num_client_connections;
   conn_config.use_uc = false;
   conn_config.prealloc_buf = kUsePmem ? pmem_buf : nullptr;
-  conn_config.buf_size = kServerBufSize;
+  conn_config.buf_size = GB(FLAGS_server_buf_size_GB);
   conn_config.buf_shm_key = kUsePmem ? -1 : 3185;
 
   auto* cb = hrd_ctrl_blk_init(0 /* id */, 0 /* port */, 0 /* numa */,
@@ -113,9 +124,63 @@ void server_func() {
   while (true) sleep(1);
 }
 
+// Choose a remote offset to write to based on the access pattern cmd line flag
+size_t remote_offset_fn_sequential(pcg64_fast& pcg, size_t global_conn_id,
+                                   size_t iter) {
+  _unused(pcg);
+  size_t num_client_connections = FLAGS_num_client_processes *
+                                  FLAGS_num_threads_per_client *
+                                  FLAGS_num_qps_per_client_thread;
+
+  size_t extent_size = GB(FLAGS_server_buf_size_GB) / num_client_connections;
+  size_t extent_base = extent_size * global_conn_id;
+
+  return extent_base +
+         ((iter % (extent_size / kClientWriteSize)) * kClientWriteSize);
+}
+
+// Choose a remote offset to write to based on the access pattern cmd line flag
+size_t remote_offset_fn_repeated(pcg64_fast& pcg, size_t global_conn_id,
+                                 size_t iter) {
+  _unused(pcg);
+  _unused(iter);
+  size_t num_client_connections = FLAGS_num_client_processes *
+                                  FLAGS_num_threads_per_client *
+                                  FLAGS_num_qps_per_client_thread;
+
+  size_t extent_size = GB(FLAGS_server_buf_size_GB) / num_client_connections;
+  size_t extent_base = extent_size * global_conn_id;
+
+  return extent_base;
+}
+
+// Choose a remote offset to write to based on the access pattern cmd line flag
+size_t remote_offset_fn_random(pcg64_fast& pcg, size_t global_conn_id,
+                               size_t iter) {
+  _unused(global_conn_id);
+  _unused(iter);
+  static_assert(kClientWriteSize % 64 == 0, "");
+  size_t rand_offset =
+      pcg() % (GB(FLAGS_server_buf_size_GB) - kClientWriteSize);
+
+  return roundup<64>(rand_offset);
+}
+
 void client_func(size_t global_thread_id) {
   hrd_conn_config_t conn_config;
-  FastRand fast_rand;
+  pcg64_fast pcg(pcg_extras::seed_seq_from<std::random_device>{});
+
+  auto remote_offset_fn = remote_offset_fn_sequential;
+  if (FLAGS_client_access_pattern == "sequential") {
+    printf("main: Using sequential remote access pattern\n");
+    remote_offset_fn = remote_offset_fn_sequential;
+  } else if (FLAGS_client_access_pattern == "repeated") {
+    printf("main: Using repeated access pattern\n");
+    remote_offset_fn = remote_offset_fn_repeated;
+  } else if (FLAGS_client_access_pattern == "random") {
+    printf("main: Using random access pattern\n");
+    remote_offset_fn = remote_offset_fn_random;
+  }
 
   conn_config.num_qps = FLAGS_num_qps_per_client_thread;
   conn_config.use_uc = false;
@@ -155,7 +220,8 @@ void client_func(size_t global_thread_id) {
   std::vector<bool> pending_vec(FLAGS_num_qps_per_client_thread, false);
   struct timespec start;
   size_t total_bytes_written = 0;
-  std::vector<size_t> bytes_per_qp(FLAGS_num_qps_per_client_thread, 0);
+  size_t iter = 0;
+  std::vector<size_t> tx_per_qp(FLAGS_num_qps_per_client_thread, 0);
   clock_gettime(CLOCK_REALTIME, &start);
 
   while (true) {
@@ -181,8 +247,7 @@ void client_func(size_t global_thread_id) {
       write_wr.sg_list = &write_sge;
       write_wr.send_flags = kReadAfterWrite ? 0 : IBV_SEND_SIGNALED;
 
-      size_t offset =
-          fast_rand.next_u32() % (kServerBufSize - kClientWriteSize);
+      size_t offset = remote_offset_fn(pcg, global_conn_id, iter);
       offset = roundup<kClientWriteSize>(offset);
       write_wr.wr.rdma.remote_addr = srv_qps[i]->buf_addr + offset;
       write_wr.wr.rdma.rkey = srv_qps[i]->rkey;
@@ -211,6 +276,7 @@ void client_func(size_t global_thread_id) {
 
       int ret = ibv_post_send(cb->conn_qp[i], &write_wr, &bad_send_wr);
       rt_assert(ret == 0);
+      iter++;
 
       pending_vec[i] = true;
     }
@@ -234,18 +300,18 @@ void client_func(size_t global_thread_id) {
 
       pending_vec[i] = false;
       total_bytes_written += kClientWriteSize;
-      bytes_per_qp[i] += kClientWriteSize;
+      tx_per_qp[i] += kClientWriteSize;
     }
 
     double sec_elapsed = sec_since(start);
-    if (sec_elapsed >= 1.0) {
+    if (sec_elapsed >= 5.0) {
       std::ostringstream fraction_per_qp_str;
       fraction_per_qp_str << "[";
       for (size_t i = 0; i < FLAGS_num_qps_per_client_thread; i++) {
         fraction_per_qp_str
-            << std::to_string(bytes_per_qp[i] * 1.0 / total_bytes_written)
+            << std::to_string(tx_per_qp[i] * 1.0 / total_bytes_written)
             << (i == FLAGS_num_qps_per_client_thread - 1 ? "" : ", ");
-        bytes_per_qp[i] = 0;
+        tx_per_qp[i] = 0;
       }
       fraction_per_qp_str << "]";
 
