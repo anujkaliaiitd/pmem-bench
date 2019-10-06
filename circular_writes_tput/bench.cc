@@ -22,6 +22,7 @@ static_assert(kBufferSize >= kWriteSize, "");
 static constexpr const char *kFileName = "/dev/dax0.0";
 static constexpr size_t kNumIters = 1000000;
 static constexpr size_t kTimerBatchSize = 1;
+static constexpr bool kUsePmem = true;
 
 int main() {
   if (getuid() != 0) {
@@ -31,13 +32,21 @@ int main() {
 
   size_t data[kBufferSize / sizeof(size_t)] = {0};
 
+  uint8_t *pbuf;
   size_t mapped_len;
-  int is_pmem;
-  uint8_t *pbuf = reinterpret_cast<uint8_t *>(
-      pmem_map_file(kFileName, 0, 0, 0666, &mapped_len, &is_pmem));
 
-  assert(pbuf != nullptr);
-  assert(mapped_len >= kBufferSize * kNumBuffers);
+  if (kUsePmem) {
+    printf("Using persistent memory buffer\n");
+    int is_pmem;
+    pbuf = reinterpret_cast<uint8_t *>(
+        pmem_map_file(kFileName, 0, 0, 0666, &mapped_len, &is_pmem));
+
+    rt_assert(pbuf != nullptr);
+    rt_assert(mapped_len >= kBufferSize * kNumBuffers);
+  } else {
+    printf("Using DRAM buffer\n");
+    pbuf = reinterpret_cast<uint8_t *>(malloc(kBufferSize * kNumBuffers));
+  }
 
   std::vector<uint64_t> lat_vec;
   lat_vec.reserve(kNumIters / kTimerBatchSize);
@@ -85,11 +94,11 @@ int main() {
 
     printf(
         "write size %zu, buffer size %zu, num_buffers %zu: %.2f M/s. "
-        "mean %zu, median %zu,[5th %zu, 95th %zu, 99th %zu, 99.9th %zu, "
+        "mean %zu, median %zu, [1st %zu, 95th %zu, 99th %zu, 99.9th %zu, "
         "99.99th %zu, 99.999th %zu], max %zu, freq = %.2f\n",
         kWriteSize, kBufferSize, kNumBuffers,
         kNumIters / (bench_seconds * 1000000), mean_ns,
-        lat_vec.at(lat_vec.size() * 0.5), lat_vec.at(lat_vec.size() * 0.05),
+        lat_vec.at(lat_vec.size() * 0.5), lat_vec.at(lat_vec.size() * 0.01),
         lat_vec.at(lat_vec.size() * 0.95), lat_vec.at(lat_vec.size() * 0.99),
         lat_vec.at(lat_vec.size() * 0.999), lat_vec.at(lat_vec.size() * 0.9999),
         lat_vec.at(lat_vec.size() * 0.99999), lat_vec.back(), rtdsc_freq);
@@ -97,6 +106,5 @@ int main() {
     lat_vec.clear();
   }
 
-  pmem_unmap(pbuf, mapped_len);
-  exit(0);
+  if (kUsePmem) pmem_unmap(pbuf, mapped_len);
 }

@@ -37,7 +37,5 @@ while true; do
 
   media_writes_0=$media_writes_1
   ddr_writes_0=$ddr_writes_1
-
-  sleep 1
 done
 
