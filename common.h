@@ -26,6 +26,12 @@ static void lfence() { asm volatile("lfence" ::: "memory"); }
 static void sfence() { asm volatile("sfence" ::: "memory"); }
 static void mfence() { asm volatile("mfence" ::: "memory"); }
 
+#define pmem_clflushopt(addr) \
+  asm volatile(".byte 0x66; clflush %0" : "+m"(*(volatile char *)(addr)));
+
+#define pmem_clwb(addr) \
+  asm volatile(".byte 0x66; xsaveopt %0" : "+m"(*(volatile char *)(addr)));
+
 template <typename T>
 static constexpr bool is_power_of_two(T x) {
   return x && ((x & T(x - 1)) == 0);

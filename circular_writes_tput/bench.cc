@@ -13,19 +13,19 @@
 #include "config.h"
 
 // Config parameters:
-// kWriteSize: Size of the data that we wish to store persistenly
-// kBufferSize: The data is written to the start of a buffer of size kBufferSize
-// kNumBuffers: We have kNumBuffers buffers of size kBufferSize
-static_assert(kBufferSize >= kWriteSize, "");
+// kNumCounters: Number of counters emulating one counter
+// kStrideSize: Distance between counters
 
 // static constexpr const char *kFileName = "/mnt/pmem12/raft_log";
 static constexpr const char *kFileName = "/dev/dax0.0";
 static constexpr size_t kNumIters = 1000000;
-static constexpr size_t kTimerBatchSize = 1;
-static constexpr bool kUsePmem = false;
+static constexpr bool kUsePmem = true;
+static constexpr bool kUseNtStore = true;
 
 int main() {
   rt_assert(getuid() == 0, "You need to be root to run this benchmark");
+  static_assert(kStrideSize >= sizeof(size_t), "");
+  static_assert(kStrideSize % sizeof(size_t) == 0, "");
 
   uint8_t *pbuf;
   size_t mapped_len;
@@ -37,28 +37,33 @@ int main() {
         pmem_map_file(kFileName, 0, 0, 0666, &mapped_len, &is_pmem));
 
     rt_assert(pbuf != nullptr);
-    rt_assert(mapped_len >= kBufferSize * kNumBuffers);
+    rt_assert(mapped_len >= kNumCounters * kStrideSize);
   } else {
     printf("Using DRAM buffer\n");
-    pbuf = reinterpret_cast<uint8_t *>(malloc(kBufferSize * kNumBuffers));
+    pbuf = reinterpret_cast<uint8_t *>(malloc(kNumCounters * kStrideSize));
   }
 
-  size_t data[kBufferSize / sizeof(size_t)] = {0};
-  for (size_t msr = 0; msr < 50; msr++) {
+  size_t count = 0;
+  for (size_t msr = 0; msr < 300; msr++) {
     struct timespec bench_start;
     clock_gettime(CLOCK_REALTIME, &bench_start);
 
-    // Real work
     for (size_t i = 0; i < kNumIters; i++) {
-      data[0]++;
-      const size_t buffer_idx = i % kNumBuffers;
-      pmem_memcpy_persist(&pbuf[buffer_idx * kBufferSize], data, kWriteSize);
+      count++;
+      size_t counter_idx = i % kNumCounters;
+      size_t buffer_offset = counter_idx * kStrideSize;
+
+      if (kUseNtStore) {
+        pmem_memcpy_persist(&pbuf[buffer_offset], &count, sizeof(size_t));
+      } else {
+        *reinterpret_cast<size_t *>(&pbuf[buffer_offset]) = count;
+        pmem_clwb(&pbuf[buffer_offset]);
+        sfence();
+      }
     }
 
-    double bench_seconds = sec_since(bench_start);
-    printf("write size %zu, buffer size %zu, num_buffers %zu: %.2f M/s.\n",
-           kWriteSize, kBufferSize, kNumBuffers,
-           kNumIters / (bench_seconds * 1000000));
+    printf("num_counters %zu, stride size %zu: %.2f M/s.\n", kNumCounters,
+           kStrideSize, kNumIters / (sec_since(bench_start) * 1000000));
   }
 
   if (kUsePmem) pmem_unmap(pbuf, mapped_len);
