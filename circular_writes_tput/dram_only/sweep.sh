@@ -1,12 +1,11 @@
-for kNumCounters in 1 2 3 4 5 8 16; do
-  for kStrideSize in 256 4096; do
-    rm config.h
-    touch config.h
+for kNumCounters in `seq 1 32`; do
+  rm config.h
+  touch config.h
 
-    echo "static constexpr size_t kNumCounters = $kNumCounters;" >> config.h
-    echo "static constexpr size_t kStrideSize = $kStrideSize;" >> config.h
+  echo "static constexpr size_t kNumCounters = $kNumCounters;" >> config.h
 
-    make
-    time numactl --physcpubind=3 --membind=0 ./bench
-  done
+  make 1>/dev/null 2>/dev/null
+  t=`/usr/bin/time -f "%e" numactl --physcpubind=3 --membind=0 ./bench`
+
+  #echo "$kNumCounters;$t"
 done
