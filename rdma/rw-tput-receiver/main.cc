@@ -9,7 +9,7 @@
 #include <vector>
 #include "../libhrd_cpp/hrd.h"
 
-static constexpr size_t kServerBufSize = MB(8);
+static constexpr size_t kServerBufSize = GB(8);
 static constexpr size_t kAppMaxPostlist = 64;
 static constexpr size_t kAppUnsigBatch = 64;
 static constexpr size_t kBaseSHMKey = 3185;
@@ -19,7 +19,7 @@ static constexpr bool kUsePmem = true;
 static constexpr const char* kPmemFile = "/dev/dax0.0";
 
 // If true, server zeroes out its buffer and reports write throughput
-static constexpr bool kZeroServerBuf = true;
+static constexpr bool kZeroServerBuf = false;
 
 DEFINE_uint64(num_client_processes, 1, "Number of client processes");
 DEFINE_uint64(num_threads_per_client, 1, "Threads per client process");
@@ -115,14 +115,15 @@ void run_client(clt_thread_params_t* params) {
   conn_config.num_qps = 1;
   conn_config.use_uc = (FLAGS_use_uc == 1);
   conn_config.prealloc_buf = nullptr;
-  conn_config.buf_size = kServerBufSize;
+  conn_config.buf_size = FLAGS_size;
   conn_config.buf_shm_key = kBaseSHMKey + clt_lid;
 
   auto* cb = hrd_ctrl_blk_init(params->global_thread_id, 0 /* port */,
                                0 /* numa */, &conn_config, nullptr);
 
   memset(const_cast<uint8_t*>(cb->conn_buf),
-         static_cast<uint8_t>(params->global_thread_id) + 1, kServerBufSize);
+         static_cast<uint8_t>(params->global_thread_id) + 1,
+         conn_config.buf_size);
 
   size_t global_conn_id = params->global_thread_id;
   auto conn_name = std::string("conn-") + std::to_string(global_conn_id);
