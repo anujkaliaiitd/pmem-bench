@@ -177,6 +177,7 @@ static size_t ns_to_cycles(double ns, double freq_ghz) {
   return static_cast<size_t>(ns * freq_ghz);
 }
 
+// Edit
 /// Convert cycles measured by rdtsc with frequence \p freq_ghz to nsec
 static double to_nsec(size_t cycles, double freq_ghz) {
   return (cycles / freq_ghz);
