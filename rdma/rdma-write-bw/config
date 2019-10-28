@@ -1,5 +1,5 @@
 --num_client_processes 1
 --num_threads_per_client 1
 --num_qps_per_client_thread 1
---server_buf_size_GB 1
+--server_buf_size_GB 32
 --client_access_pattern sequential
