@@ -28,7 +28,6 @@ void send_req(ClientContext *c, size_t msgbuf_idx) {
            c->thread_id, msgbuf_idx);
   }
 
-  c->req_ts[msgbuf_idx] = erpc::rdtsc();
   c->rpc->enqueue_request(c->session_num_vec[0], kAppReqType, &req_msgbuf,
                           &c->resp_msgbuf[msgbuf_idx], app_cont_func,
                           reinterpret_cast<void *>(msgbuf_idx));
@@ -42,15 +41,52 @@ void req_handler(erpc::ReqHandle *req_handle, void *_context) {
   const erpc::MsgBuffer *req_msgbuf = req_handle->get_req_msgbuf();
   erpc::rt_assert(req_msgbuf->get_data_size() == FLAGS_req_size);
 
-  const size_t copy_size = req_msgbuf->get_data_size();
-  if (c->file_offset + copy_size >= kAppPmemFileSize) c->file_offset = 0;
-  pmem_memcpy_persist(&c->pbuf[c->file_offset], req_msgbuf->buf, copy_size);
+  if (c->cur_offset + FLAGS_req_size >= c->offset_hi) {
+    c->cur_offset = c->offset_lo;
+  }
 
-  c->file_offset += copy_size;
+  size_t start = erpc::rdtsc();
+  pmem_memcpy_persist(&c->pbuf[c->cur_offset], req_msgbuf->buf, FLAGS_req_size);
+  c->pmem_write_bytes += FLAGS_req_size;
+  c->pmem_write_cycles += (erpc::rdtsc() - start);
 
+  if (c->pmem_write_bytes >= GB(2)) {
+    size_t wr_nsec =
+        erpc::to_nsec(c->pmem_write_cycles, c->rpc->get_freq_ghz());
+    printf("Server thread %zu: Pmem write tput = %.2f GB/s\n", c->thread_id,
+           c->pmem_write_bytes * 1.0 / wr_nsec);
+
+    c->pmem_write_bytes = 0;
+    c->pmem_write_cycles = 0;
+  }
+
+  c->cur_offset += FLAGS_req_size;
   erpc::Rpc<erpc::CTransport>::resize_msg_buffer(&req_handle->pre_resp_msgbuf,
                                                  FLAGS_resp_size);
   c->rpc->enqueue_response(req_handle, &req_handle->pre_resp_msgbuf);
+}
+
+// The function executed by each client thread in the cluster
+void server_func(size_t thread_id, erpc::Nexus *nexus, uint8_t *pbuf) {
+  std::vector<size_t> port_vec = flags_get_numa_ports(FLAGS_numa_node);
+  uint8_t phy_port = port_vec.at(0);
+
+  ServerContext c;
+  erpc::Rpc<erpc::CTransport> rpc(nexus, static_cast<void *>(&c), thread_id,
+                                  basic_sm_handler, phy_port);
+  erpc::rt_assert(FLAGS_resp_size <= rpc.get_max_data_per_pkt());
+
+  c.rpc = &rpc;
+  c.thread_id = thread_id;
+  c.pbuf = pbuf;
+  c.offset_lo = (kAppPmemFileSize / FLAGS_num_proc_0_threads) * thread_id;
+  c.offset_hi = (kAppPmemFileSize / FLAGS_num_proc_0_threads) * (thread_id + 1);
+  c.cur_offset = c.offset_lo;
+
+  while (true) {
+    rpc.run_event_loop(1000);
+    if (ctrl_c_pressed == 1) break;
+  }
 }
 
 void app_cont_func(void *_context, void *_tag) {
@@ -61,11 +97,6 @@ void app_cont_func(void *_context, void *_tag) {
   if (kAppVerbose) {
     printf("large_rpc_tput: Received response for msgbuf %zu.\n", msgbuf_idx);
   }
-
-  // Measure latency. 1 us granularity is sufficient for large RPC latency.
-  double usec = erpc::to_usec(erpc::rdtsc() - c->req_ts[msgbuf_idx],
-                              c->rpc->get_freq_ghz());
-  c->lat_vec.push_back(usec);
 
   erpc::rt_assert(resp_msgbuf.get_data_size() == FLAGS_resp_size,
                   "Invalid response size");
@@ -94,28 +125,6 @@ void client_connect_sessions(BasicAppContext *c) {
   while (c->num_sm_resps != 1) {
     c->rpc->run_event_loop(200);  // 200 milliseconds
     if (ctrl_c_pressed == 1) return;
-  }
-}
-
-// The function executed by each client thread in the cluster
-void server_func(size_t thread_id, erpc::Nexus *nexus) {
-  _unused(thread_id);
-  std::vector<size_t> port_vec = flags_get_numa_ports(FLAGS_numa_node);
-  uint8_t phy_port = port_vec.at(0);
-
-  ServerContext c;
-  erpc::Rpc<erpc::CTransport> rpc(nexus, static_cast<void *>(&c), 0 /* tid */,
-                                  basic_sm_handler, phy_port);
-  c.rpc = &rpc;
-  erpc::rt_assert(FLAGS_resp_size <= rpc.get_max_data_per_pkt());
-
-  printf("Mapping pmem file...");
-  c.pbuf = erpc::map_devdax_file(kAppPmemFile, kAppPmemFileSize);
-  printf("done.\n");
-
-  while (true) {
-    rpc.run_event_loop(1000);
-    if (ctrl_c_pressed == 1) break;
   }
 }
 
@@ -168,39 +177,15 @@ void client_func(size_t thread_id, app_stats_t *app_stats, erpc::Nexus *nexus) {
     stats.rx_gbps = c.stat_rx_bytes_tot * 8 / ns;
     stats.tx_gbps = c.stat_tx_bytes_tot * 8 / ns;
 
-    if (c.lat_vec.size() > 0) {
-      std::sort(c.lat_vec.begin(), c.lat_vec.end());
-      stats.rpc_50_us = c.lat_vec[c.lat_vec.size() * 0.50];
-      stats.rpc_99_us = c.lat_vec[c.lat_vec.size() * 0.99];
-    } else {
-      // Even if no RPCs completed, we need retransmission counter
-      stats.rpc_50_us = kAppEvLoopMs * 1000;
-      stats.rpc_99_us = kAppEvLoopMs * 1000;
-    }
-
     // Reset stats for next iteration
     c.stat_rx_bytes_tot = 0;
     c.stat_tx_bytes_tot = 0;
     c.rpc->reset_num_re_tx(c.session_num_vec[0]);
-    c.lat_vec.clear();
 
     printf(
         "large_rpc_tput: Thread %zu: Tput {RX %.2f, TX %.2f} Gbps. "
-        "RPC latency {%.1f, %.1f}. Credits %zu (best = 32).\n",
-        c.thread_id, stats.rx_gbps, stats.tx_gbps, stats.rpc_50_us,
-        stats.rpc_99_us, erpc::kSessionCredits);
-
-    if (c.thread_id == 0) {
-      app_stats_t accum_stats;
-      for (size_t i = 0; i < FLAGS_num_proc_other_threads; i++) {
-        accum_stats += c.app_stats[i];
-      }
-
-      // Compute averages for non-additive stats
-      accum_stats.rpc_50_us /= FLAGS_num_proc_other_threads;
-      accum_stats.rpc_99_us /= FLAGS_num_proc_other_threads;
-      c.tmp_stat->write(accum_stats.to_string());
-    }
+        "Credits %zu (best = 32).\n",
+        c.thread_id, stats.rx_gbps, stats.tx_gbps, erpc::kSessionCredits);
 
     clock_gettime(CLOCK_REALTIME, &c.tput_t0);
   }
@@ -223,8 +208,15 @@ int main(int argc, char **argv) {
   std::vector<std::thread> threads(num_threads);
 
   if (FLAGS_process_id == 0) {
+    // Each thread needs at least FLAGS_req_size space in the buffer
+    erpc::rt_assert(kAppPmemFileSize >= FLAGS_req_size * num_threads);
+
+    printf("Server: Mapping pmem file for all threads...");
+    uint8_t *pbuf = erpc::map_devdax_file(kAppPmemFile, kAppPmemFileSize);
+    printf("Server: Done.\n");
+
     for (size_t i = 0; i < num_threads; i++) {
-      threads[i] = std::thread(server_func, i, &nexus);
+      threads[i] = std::thread(server_func, i, &nexus, pbuf);
       erpc::bind_to_core(threads[i], FLAGS_numa_node, i);
     }
   } else {
