@@ -13,12 +13,6 @@
 
 static constexpr size_t kAppEvLoopMs = 1000;  // Duration of event loop
 static constexpr bool kAppVerbose = false;
-
-// Experiment control flags
-static constexpr bool kAppClientMemsetReq = false;   // Fill entire request
-static constexpr bool kAppServerMemsetResp = false;  // Fill entire response
-static constexpr bool kAppClientCheckResp = false;   // Check entire response
-
 static constexpr const char *kAppPmemFile = "/dev/dax0.0";
 static constexpr size_t kAppPmemFileSize = GB(32);
 
@@ -46,6 +40,8 @@ void req_handler(erpc::ReqHandle *req_handle, void *_context) {
   auto *c = static_cast<ServerContext *>(_context);
 
   const erpc::MsgBuffer *req_msgbuf = req_handle->get_req_msgbuf();
+  erpc::rt_assert(req_msgbuf->get_data_size() == FLAGS_req_size);
+
   const size_t copy_size = req_msgbuf->get_data_size();
   if (c->file_offset + copy_size >= kAppPmemFileSize) c->file_offset = 0;
   pmem_memcpy_persist(&c->pbuf[c->file_offset], req_msgbuf->buf, copy_size);
@@ -71,30 +67,9 @@ void app_cont_func(void *_context, void *_tag) {
                               c->rpc->get_freq_ghz());
   c->lat_vec.push_back(usec);
 
-  // Check the response
   erpc::rt_assert(resp_msgbuf.get_data_size() == FLAGS_resp_size,
                   "Invalid response size");
-
-  if (kAppClientCheckResp) {
-    bool match = true;
-    // Check all response cachelines (checking every byte is slow)
-    for (size_t i = 0; i < FLAGS_resp_size; i += 64) {
-      if (resp_msgbuf.buf[i] != kAppDataByte) match = false;
-    }
-    erpc::rt_assert(match, "Invalid resp data");
-  } else {
-    erpc::rt_assert(resp_msgbuf.buf[0] == kAppDataByte, "Invalid resp data");
-  }
-
   c->stat_rx_bytes_tot += FLAGS_resp_size;
-
-  // Create a new request clocking this response, and put in request queue
-  if (kAppClientMemsetReq) {
-    memset(c->req_msgbuf[msgbuf_idx].buf, kAppDataByte, FLAGS_req_size);
-  } else {
-    c->req_msgbuf[msgbuf_idx].buf[0] = kAppDataByte;
-  }
-
   send_req(c, msgbuf_idx);
 }
 
@@ -132,6 +107,7 @@ void server_func(size_t thread_id, erpc::Nexus *nexus) {
   erpc::Rpc<erpc::CTransport> rpc(nexus, static_cast<void *>(&c), 0 /* tid */,
                                   basic_sm_handler, phy_port);
   c.rpc = &rpc;
+  erpc::rt_assert(FLAGS_resp_size <= rpc.get_max_data_per_pkt());
 
   printf("Mapping pmem file...");
   c.pbuf = erpc::map_devdax_file(kAppPmemFile, kAppPmemFileSize);
@@ -168,7 +144,6 @@ void client_func(size_t thread_id, app_stats_t *app_stats, erpc::Nexus *nexus) {
     printf("large_rpc_tput: Thread %zu: No sessions created.\n", thread_id);
   }
 
-  // All threads allocate MsgBuffers, but they may not send requests
   alloc_req_resp_msg_buffers(&c);
 
   clock_gettime(CLOCK_REALTIME, &c.tput_t0);
@@ -249,12 +224,10 @@ int main(int argc, char **argv) {
 
   if (FLAGS_process_id == 0) {
     for (size_t i = 0; i < num_threads; i++) {
-      threads[i] = std::thread(server_func, &nexus);
+      threads[i] = std::thread(server_func, i, &nexus);
       erpc::bind_to_core(threads[i], FLAGS_numa_node, i);
     }
-  }
-
-  else {
+  } else {
     auto *app_stats = new app_stats_t[num_threads];  // Leaked
 
     for (size_t i = 0; i < num_threads; i++) {

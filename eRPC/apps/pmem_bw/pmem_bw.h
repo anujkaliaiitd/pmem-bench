@@ -4,7 +4,6 @@
 #include <signal.h>
 #include "../apps_common.h"
 #include "rpc.h"
-#include "util/autorun_helpers.h"
 #include "util/numautils.h"
 
 static constexpr size_t kAppReqType = 1;
@@ -83,6 +82,6 @@ void alloc_req_resp_msg_buffers(ClientContext* c) {
     c->resp_msgbuf[i] = c->rpc->alloc_msg_buffer_or_die(FLAGS_resp_size);
 
     // Fill the request regardless of kAppMemset. This is a one-time thing.
-    memset(c->req_msgbuf[i].buf, kAppDataByte, FLAGS_req_size);
+    memset(c->req_msgbuf[i].buf, i, FLAGS_req_size);
   }
 }
