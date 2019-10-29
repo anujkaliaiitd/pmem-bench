@@ -45,7 +45,7 @@ refresh_watch_out
 media_writes_0=`sum_from_watch_out MediaWrites`
 ddr_writes_0=`sum_from_watch_out WriteRequests`
 
-sleep_seconds=1
+sleep_seconds=20
 while true; do
   sleep $sleep_seconds
 
