@@ -44,19 +44,6 @@ static constexpr T roundup(T x) {
   return ((x) + T(PowerOfTwoNumber - 1)) & (~T(PowerOfTwoNumber - 1));
 }
 
-// Aligns 64b input parameter to the next power of 2
-static uint64_t rte_align64pow2(uint64_t v) {
-  v--;
-  v |= v >> 1;
-  v |= v >> 2;
-  v |= v >> 4;
-  v |= v >> 8;
-  v |= v >> 16;
-  v |= v >> 32;
-
-  return v + 1;
-}
-
 class SlowRand {
   std::random_device rand_dev;  // Non-pseudorandom seed for twister
   std::mt19937_64 mt;
