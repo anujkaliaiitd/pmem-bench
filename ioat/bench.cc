@@ -18,7 +18,7 @@
 #include "huge_alloc.h"
 
 static constexpr const char *kPmemFile = "/dev/dax0.0";
-static constexpr size_t kFileSize = GB(128);
+static constexpr size_t kFileSize = GB(32);
 static constexpr size_t kNumaNode = 0;
 static constexpr size_t kDevID = 0;
 static constexpr size_t kIoatRingSize = 512;
@@ -99,20 +99,17 @@ int main(int argc, char **argv) {
   rt_assert(mapped_len >= kFileSize);
   rt_assert(is_pmem == 1);
 
-  printf("Zeroing pbuf\n");
-  memset(pbuf, 0, kFileSize);
-  printf("Finished zeroing pbuf\n");
+  printf("Mapping-in dst_buf pages\n");
+  for (size_t i = 0; i < kFileSize; i += MB(2)) pbuf[i] = i;
+  printf("Done\n");
 
   uint64_t pbuf_phy = v2p.translate(pbuf);
   rt_assert(pbuf_phy != 0, "Failed to translate pmem buffer");
 
-  // Check that pbuf hugepages are all contiguous
-  for (size_t i = MB(2); i < kFileSize; i += MB(2)) {
-    if (v2p.translate(&pbuf[i]) != pbuf_phy + i) {
-      printf("Pmem buffer non-contiguous at offset %zu\n", i);
-      exit(-1);
-    }
-  }
+  // Check (using one random page) that pbuf hugepages are contiguous
+  size_t rand_offset = slow_rand.next_u64() % kFileSize;
+  rt_assert(v2p.translate(&pbuf[rand_offset]) == pbuf_phy + rand_offset,
+            "Error: pbuf hugepages not contiguous");
 
   // Allocate source buffer
   hugealloc::Buffer src = huge_alloc.alloc(FLAGS_size);
@@ -120,8 +117,7 @@ int main(int argc, char **argv) {
 
   size_t outstanding_copies = 0;
 
-  for (size_t iters = 0; iters < 100; iters++) {
-    printf("Starting work. Iter = %zu\n", iters);
+  for (size_t iters = 0; iters < 6; iters++) {
     size_t timer_start = rdtsc();
     for (size_t i = 0; i < kFileSize; i += FLAGS_size) {
       ret = rte_ioat_enqueue_copy(kDevID, src.phys_addr, pbuf_phy + i,
@@ -138,7 +134,6 @@ int main(int argc, char **argv) {
     }
 
     // Wait for outstanding copies before deleting hugepages
-    printf("Waiting for outstanding copies to finish\n");
     while (outstanding_copies > 0) {
       poll_one();
       outstanding_copies--;

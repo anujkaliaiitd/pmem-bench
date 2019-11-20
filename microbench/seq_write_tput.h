@@ -29,7 +29,7 @@ void bench_seq_write_tput(uint8_t *pbuf, size_t thread_id, size_t copy_sz,
     clock_gettime(CLOCK_REALTIME, &start);
 
     for (size_t i = 0; i < kCopyPerThreadPerMsr / copy_sz; i++) {
-      pmem_memmove_persist(&pbuf[offset], dram_src_buf, copy_sz);
+      pmem_memset_persist(&pbuf[offset], i % 256, copy_sz);
       offset += copy_sz;
       if (offset + copy_sz >= base_offset + excl_bytes_per_thread) {
         offset = base_offset;
