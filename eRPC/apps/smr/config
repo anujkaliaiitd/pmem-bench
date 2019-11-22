@@ -1,3 +1,0 @@
---test_ms 20000
---num_processes 4
---num_raft_servers 3
