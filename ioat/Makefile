@@ -1,4 +1,4 @@
-DPDK_HOME=~/dpdk
+DPDK_HOME=/usr
 
 CFLAGS=-Wall -Wextra -Werror -pedantic -fpermissive -march=native \
 			 -Wold-style-cast -Wsign-conversion \

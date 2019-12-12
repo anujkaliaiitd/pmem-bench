@@ -111,7 +111,7 @@ int main(int argc, char **argv) {
   rt_assert(v2p.translate(&pbuf[rand_offset]) == pbuf_phy + rand_offset,
             "Error: pbuf hugepages not contiguous");
 
-  // Allocate source buffer
+  // Allocate source buffer that we'll paste into the NVM file
   hugealloc::Buffer src = huge_alloc.alloc(FLAGS_size);
   for (size_t i = 0; i < FLAGS_size; i++) src.buf[i] = rand();
 
