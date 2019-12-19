@@ -29,11 +29,6 @@ namespace hugealloc {
 
 static constexpr size_t kHugepageSize = (2 * 1024 * 1024);  ///< Hugepage size
 
-/// Enable returning physical addresses in Buffers
-static constexpr bool kEnablePhysAddrs = true;
-
-static constexpr uint64_t kInvalidPhysAddr = UINT64_MAX;
-
 //
 // Utility classes for HugeAlloc
 //
@@ -78,62 +73,6 @@ class SlowRand {
   inline uint64_t next_u64() { return dist(mt); }
 };
 
-/// Virtual-to-physical address translation
-class Virt2Phy {
-  static constexpr size_t kPfnMasSize = 8;
-
- public:
-  Virt2Phy() {
-    fd = open("/proc/self/pagemap", O_RDONLY);
-    if (fd < 0) {
-      printf("%s(): cannot open /proc/self/pagemap\n", strerror(errno));
-      exit(-1);
-    }
-
-    page_size = static_cast<size_t>(getpagesize());  // Standard page size
-  }
-
-  ~Virt2Phy() { close(fd); }
-
-  // Get physical address of any mapped virtual address in the current process.
-  uint64_t translate(const void *virtaddr) {
-    auto virt_pfn = static_cast<unsigned long>(
-        reinterpret_cast<uint64_t>(virtaddr) / page_size);
-    size_t offset = sizeof(uint64_t) * virt_pfn;
-
-    if (lseek(fd, static_cast<long>(offset), SEEK_SET) == -1) {
-      printf("%s(): seek error in /proc/self/pagemap\n", strerror(errno));
-      close(fd);
-      return 0;
-    }
-
-    uint64_t page;
-    int ret = read(fd, &page, kPfnMasSize);
-    if (ret < 0) {
-      fprintf(stderr, "cannot read /proc/self/pagemap: %s\n", strerror(errno));
-      return 0;
-    } else if (static_cast<size_t>(ret) != kPfnMasSize) {
-      fprintf(stderr,
-              "read %d bytes from /proc/self/pagemap but expected %zu:\n", ret,
-              kPfnMasSize);
-      return 0;
-    }
-
-    // The pfn (page frame number) are bits 0-54 (see pagemap.txt in linux
-    // Documentation)
-    if ((page & 0x7fffffffffffffULL) == 0) return 0;
-
-    uint64_t physaddr = ((page & 0x7fffffffffffffULL) * page_size) +
-                        (reinterpret_cast<uint64_t>(virtaddr) % page_size);
-
-    return physaddr;
-  }
-
- private:
-  int fd;
-  size_t page_size;
-};
-
 //
 // Definitions for HugeAlloc
 //
@@ -154,31 +93,24 @@ struct shm_region_t {
 /// The hugepage allocator returns Buffers
 class Buffer {
  public:
+  Buffer(uint8_t *buf, size_t class_size) : buf(buf), class_size(class_size) {}
+
   Buffer() {}
 
   ~Buffer() {
     // The hugepage allocator frees up memory for its Buffers
   }
 
-  Buffer(uint8_t *buf, size_t class_size, uint64_t phys_addr)
-      : buf(buf), class_size(class_size), phys_addr(phys_addr) {}
-
   /// Return a string representation of this Buffer (excluding lkey)
   std::string to_string() const {
     char ret[100];
-    sprintf(ret, "[buf %p, class sz %zu, phys_addr %p]", buf, class_size,
-            reinterpret_cast<void *>(phys_addr));
+    sprintf(ret, "[buf %p, class sz %zu]", buf, class_size);
     return std::string(ret);
   }
 
   /// The backing memory of this Buffer. The Buffer is invalid if this is null.
   uint8_t *buf;
   size_t class_size;  ///< The size of the hugealloc class used for this Buffer
-
-  /// For Buffers <= kHugepageSize, phys_addr is the physical address of buf.
-  /// For larger Buffers, phys_addr is invalid, because larger Buffers may not
-  /// be contiguous in physical memory.
-  uint64_t phys_addr;
 };
 
 /// Return the index of the most significant bit of x. The index of the 2^0
@@ -270,10 +202,7 @@ class HugeAlloc {
     assert(num_buffers >= 1);
     for (size_t i = 0; i < num_buffers; i++) {
       uint8_t *buf = buffer.buf + (i * kMaxClassSize);
-
-      // These Buffers are larger than 2 MB, so we don't have a physical address
-      freelist[kNumClasses - 1].push_back(
-          Buffer(buf, kMaxClassSize, kInvalidPhysAddr));
+      freelist[kNumClasses - 1].push_back(Buffer(buf, kMaxClassSize));
     }
     return true;
   }
@@ -326,7 +255,7 @@ class HugeAlloc {
 
           case ENOMEM:
             // Out of memory - this is OK
-            return Buffer(nullptr, 0, kInvalidPhysAddr);
+            return Buffer(nullptr, 0);
 
           default:
             xmsg << "HugeAlloc: Unexpected SHM malloc error "
@@ -356,20 +285,12 @@ class HugeAlloc {
     rt_assert(ret == 0,
               "HugeAlloc: mbind() failed. Key " + std::to_string(shm_key));
 
-    // Page-in all hugepages so they get assigned physical addresses.
-    // This is slow!
-    for (size_t i = 0; i < size; i += kHugepageSize) shm_buf[i] = 0;
-
     // Save the SHM region so we can free it later
     shm_list.push_back(shm_region_t(shm_key, shm_buf, size));
     stats.shm_reserved += size;
 
     // buffer.class_size is invalid because we didn't allocate from a class
-    if (size <= kHugepageSize) {
-      return Buffer(shm_buf, SIZE_MAX, v2p.translate(shm_buf));
-    } else {
-      return Buffer(shm_buf, SIZE_MAX, kInvalidPhysAddr);
-    }
+    return Buffer(shm_buf, SIZE_MAX);
   }
 
   /**
@@ -406,7 +327,7 @@ class HugeAlloc {
 
         if (!success) {
           prev_allocation_size /= 2;  // Restore the previous allocation
-          return Buffer(nullptr, 0, kInvalidPhysAddr);
+          return Buffer(nullptr, 0);
         }
 
         next_class = kNumClasses - 1;
@@ -477,30 +398,14 @@ class HugeAlloc {
   }
 
   /// Split one Buffers from class size_class into two Buffers of the previous
-  /// class. If physical addresses are enabled, we do virtual-to-physical
-  /// address translation when splitting into 2 MB Buffers.
+  /// class.
   inline void split(size_t size_class) {
     Buffer buffer = freelist[size_class].back();
     freelist[size_class].pop_back();
 
-    const size_t split_class_size = buffer.class_size / 2;
-
-    // Start with invalid physical addresses
-    auto buffer_0 = Buffer(buffer.buf, split_class_size, kInvalidPhysAddr);
-    auto buffer_1 = Buffer(buffer.buf + split_class_size, split_class_size,
-                           kInvalidPhysAddr);
-
-    if (kEnablePhysAddrs && split_class_size <= kHugepageSize) {
-      if (split_class_size < kHugepageSize) {
-        // Inherit physical addresses from parent Buffer
-        buffer_0.phys_addr = buffer.phys_addr;
-        buffer_1.phys_addr = buffer.phys_addr + split_class_size;
-      } else {
-        // Here, split_class_size == kHugepageSize
-        buffer_0.phys_addr = v2p.translate(buffer_0.buf);
-        buffer_1.phys_addr = v2p.translate(buffer_1.buf);
-      }
-    }
+    Buffer buffer_0 = Buffer(buffer.buf, buffer.class_size / 2);
+    Buffer buffer_1 =
+        Buffer(buffer.buf + buffer.class_size / 2, buffer.class_size / 2);
 
     freelist[size_class - 1].push_back(buffer_0);
     freelist[size_class - 1].push_back(buffer_1);
@@ -512,7 +417,6 @@ class HugeAlloc {
   SlowRand slow_rand;           /// RNG to generate SHM keys
   const size_t numa_node;       /// NUMA node on which all memory is allocated
   size_t prev_allocation_size;  /// Size of previous hugepage reservation
-  Virt2Phy v2p;                 /// The virtual-to-physical address translator
 
   // Stats
   struct {
