@@ -1,8 +1,8 @@
 #!/bin/bash
 
-flush_cachelines=1
-use_ioat=1
 num_prints=3
+use_ioat=1
+use_pmem=0
 
 stat_file=$(mktemp)
 out_file=$(mktemp)
@@ -17,9 +17,9 @@ function sweep_num_ioat_engines() {
       sudo -E env numactl --physcpubind=0 --membind=0 ./bench \
         --num_prints $num_prints \
         --use_ioat $use_ioat \
+        --use_pmem $use_pmem \
         --size $size \
-        --window_size $window_size \
-        --flush_cachelines $flush_cachelines 1>${out_file} 2>${out_file}
+        --window_size $window_size 1>${out_file} 2>${out_file}
 
       # The last num_prints lines of out_file are formatted like:
       # 10.2 GB/s

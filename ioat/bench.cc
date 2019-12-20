@@ -44,7 +44,6 @@ DEFINE_uint64(size, KB(128), "Size of each copy");
 DEFINE_uint64(window_size, 8, "Number of outstanding transfers");
 DEFINE_uint64(use_ioat, 1, "Use IOAT DMA engines, else memcpy");
 DEFINE_uint64(use_pmem, 1, "Use persistent memory for destination buffer");
-DEFINE_uint64(flush_cachelines, 1, "Flush src and dst cachelines before copy");
 
 // Initialize and start device 0
 void setup_ioat_device() {
@@ -146,6 +145,7 @@ int main(int argc, char **argv) {
     hugealloc::Buffer _dst_buf = huge_alloc->alloc_raw(kDstBufferSize);
     rt_assert(_dst_buf.buf != nullptr);
     rt_assert(reinterpret_cast<size_t>(_dst_buf.buf) % MB(2) == 0);
+    dst_buf = _dst_buf.buf;
   }
 
   for (size_t i = 0; i < kDstBufferSize; i += MB(2)) dst_buf[i] = i;  // Page-in
