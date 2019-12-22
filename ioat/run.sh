@@ -2,7 +2,8 @@
 
 num_prints=3
 use_ioat=1
-use_pmem=0
+use_pmem=1
+numa_node=1 
 
 stat_file=$(mktemp)
 out_file=$(mktemp)
@@ -14,10 +15,11 @@ function sweep_num_ioat_engines() {
   for size in 1024 2048 4096 8192 16384 32768 65536 131072; do
     stat_str="$size" # Saved in stat_file at the end of a window
     for window_size in $window_sizes; do 
-      sudo -E env numactl --physcpubind=0 --membind=0 ./bench \
+      sudo -E env numactl --cpunodebind=$numa_node --membind=$numa_node ./bench \
         --num_prints $num_prints \
         --use_ioat $use_ioat \
         --use_pmem $use_pmem \
+        --numa_node $numa_node \
         --size $size \
         --window_size $window_size 1>${out_file} 2>${out_file}
 
@@ -33,6 +35,7 @@ function sweep_num_ioat_engines() {
     echo $stat_str >> ${stat_file}
   done
 
+  echo "Results for: use_ioat $use_ioat, use_pmem $use_pmem"
   cat ${stat_file}
 }
 

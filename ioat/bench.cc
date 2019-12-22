@@ -31,9 +31,8 @@
 #include "huge_alloc.h"
 #include "virt2phy.h"
 
-static constexpr const char *kPmemFile = "/dev/dax0.0";
-static constexpr size_t kNumaNode = 0;
-static constexpr size_t kDevID = 0;
+static constexpr size_t kIoatDevID = 0;
+static constexpr size_t kIoatDoFence = 1;
 static constexpr size_t kIoatRingSize = 512;
 
 static constexpr size_t kDstBufferSize = GB(4);
@@ -42,6 +41,7 @@ static constexpr bool kCheckCopyResults = true;
 DEFINE_uint64(num_prints, 3, "Number of measurements printed before exit");
 DEFINE_uint64(size, KB(128), "Size of each copy");
 DEFINE_uint64(window_size, 8, "Number of outstanding transfers");
+DEFINE_uint64(numa_node, 1, "NUMA node for experiment");
 DEFINE_uint64(use_ioat, 1, "Use IOAT DMA engines, else memcpy");
 DEFINE_uint64(use_pmem, 1, "Use persistent memory for destination buffer");
 
@@ -50,32 +50,32 @@ void setup_ioat_device() {
   struct rte_rawdev_info info;
   info.dev_private = NULL;
 
-  rt_assert(rte_rawdev_info_get(kDevID, &info) == 0);
+  rt_assert(rte_rawdev_info_get(kIoatDevID, &info) == 0);
   rt_assert(std::string(info.driver_name).find("ioat") != std::string::npos);
 
   struct rte_ioat_rawdev_config p;
   memset(&info, 0, sizeof(info));
   info.dev_private = &p;
 
-  rte_rawdev_info_get(kDevID, &info);
+  rte_rawdev_info_get(kIoatDevID, &info);
   rt_assert(p.ring_size == 0, "Initial ring size is non-zero");
 
   p.ring_size = kIoatRingSize;
-  rt_assert(rte_rawdev_configure(kDevID, &info) == 0,
+  rt_assert(rte_rawdev_configure(kIoatDevID, &info) == 0,
             "rte_rawdev_configure failed");
 
-  rte_rawdev_info_get(kDevID, &info);
+  rte_rawdev_info_get(kIoatDevID, &info);
   rt_assert(p.ring_size == kIoatRingSize, "Wrong ring size");
 
-  rt_assert(rte_rawdev_start(kDevID) == 0, "Rawdev start failed");
+  rt_assert(rte_rawdev_start(kIoatDevID) == 0, "Rawdev start failed");
 
-  printf("Started device %zu\n", kDevID);
+  printf("Started device %zu\n", kIoatDevID);
 }
 
 void poll_one() {
   while (true) {
     uintptr_t _src, _dst;
-    int ret = rte_ioat_completed_copies(kDevID, 1u, &_src, &_dst);
+    int ret = rte_ioat_completed_copies(kIoatDevID, 1u, &_src, &_dst);
     rt_assert(ret >= 0, "rte_ioat_completed_copies error");
 
     if (ret > 0) break;
@@ -118,7 +118,7 @@ int main(int argc, char **argv) {
   }
 
   // Create source and destination buffers
-  auto huge_alloc = new hugealloc::HugeAlloc(MB(512), kNumaNode);
+  auto huge_alloc = new hugealloc::HugeAlloc(MB(512), FLAGS_numa_node);
   std::vector<hugealloc::Buffer> src_bufs(FLAGS_window_size);
   for (size_t i = 0; i < FLAGS_window_size; i++) {
     src_bufs[i] = huge_alloc->alloc(FLAGS_size);
@@ -134,8 +134,11 @@ int main(int argc, char **argv) {
     // Map pmem buffer
     size_t mapped_len;
     int is_pmem;
+
+    std::string pmem_file =
+        FLAGS_numa_node == 0 ? "/dev/dax0.0" : "/dev/dax1.0";
     dst_buf = reinterpret_cast<uint8_t *>(
-        pmem_map_file(kPmemFile, 0, 0, 0666, &mapped_len, &is_pmem));
+        pmem_map_file(pmem_file.c_str(), 0, 0, 0666, &mapped_len, &is_pmem));
 
     rt_assert(dst_buf != nullptr);
     rt_assert(mapped_len >= kDstBufferSize);
@@ -181,12 +184,12 @@ int main(int argc, char **argv) {
 
       // Pass zeroes as callback args, we don't need them for now
       int ret = rte_ioat_enqueue_copy(
-          kDevID, src_phys_addr, dst_phys_addr, FLAGS_size,
+          kIoatDevID, src_phys_addr, dst_phys_addr, FLAGS_size,
           reinterpret_cast<uintptr_t>(src_buf_ptr),
-          reinterpret_cast<uintptr_t>(dst_buf_ptr), 0);
+          reinterpret_cast<uintptr_t>(dst_buf_ptr), kIoatDoFence);
 
       rt_assert(ret == 1, "Error with rte_ioat_enqueue_copy");
-      rte_ioat_do_copies(kDevID);
+      rte_ioat_do_copies(kIoatDevID);
 
       ioat_outstanding_jobs++;
       rt_assert(ioat_outstanding_jobs <= kIoatRingSize);
@@ -195,7 +198,7 @@ int main(int argc, char **argv) {
         // Poll for a completed copy
         while (true) {
           uintptr_t _src = 0, _dst = 0;
-          int ret = rte_ioat_completed_copies(kDevID, 1u, &_src, &_dst);
+          int ret = rte_ioat_completed_copies(kIoatDevID, 1u, &_src, &_dst);
           rt_assert(ret >= 0, "rte_ioat_completed_copies error");
 
           if (ret == 1 && kCheckCopyResults) {
@@ -247,7 +250,7 @@ int main(int argc, char **argv) {
   printf("Waiting for outstanding copies to finish\n");
   while (FLAGS_use_ioat == 1 && ioat_outstanding_jobs > 0) {
     uintptr_t _src, _dst;
-    int ret = rte_ioat_completed_copies(kDevID, 1u, &_src, &_dst);
+    int ret = rte_ioat_completed_copies(kIoatDevID, 1u, &_src, &_dst);
     rt_assert(ret >= 0, "rte_ioat_completed_copies error");
     ioat_outstanding_jobs -= static_cast<size_t>(ret);
   }
