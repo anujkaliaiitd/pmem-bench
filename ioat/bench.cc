@@ -32,16 +32,18 @@
 #include "virt2phy.h"
 
 static constexpr size_t kIoatDevID = 0;
-static constexpr size_t kIoatDoFence = 1;
+static constexpr size_t kIoatDoFence = 0;
 static constexpr size_t kIoatRingSize = 512;
 
-static constexpr size_t kDstBufferSize = GB(4);
+static constexpr size_t kDstBufferSize = GB(32);
 static constexpr bool kCheckCopyResults = true;
+
+static constexpr const char *kPmemFile = "/dev/dax0.0";
 
 DEFINE_uint64(num_prints, 3, "Number of measurements printed before exit");
 DEFINE_uint64(size, KB(128), "Size of each copy");
 DEFINE_uint64(window_size, 8, "Number of outstanding transfers");
-DEFINE_uint64(numa_node, 1, "NUMA node for experiment");
+DEFINE_uint64(numa_node, 0, "NUMA node for experiment");
 DEFINE_uint64(use_ioat, 1, "Use IOAT DMA engines, else memcpy");
 DEFINE_uint64(use_pmem, 1, "Use persistent memory for destination buffer");
 
@@ -135,10 +137,8 @@ int main(int argc, char **argv) {
     size_t mapped_len;
     int is_pmem;
 
-    std::string pmem_file =
-        FLAGS_numa_node == 0 ? "/dev/dax0.0" : "/dev/dax1.0";
     dst_buf = reinterpret_cast<uint8_t *>(
-        pmem_map_file(pmem_file.c_str(), 0, 0, 0666, &mapped_len, &is_pmem));
+        pmem_map_file(kPmemFile, 0, 0, 0666, &mapped_len, &is_pmem));
 
     rt_assert(dst_buf != nullptr);
     rt_assert(mapped_len >= kDstBufferSize);

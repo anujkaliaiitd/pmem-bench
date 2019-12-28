@@ -3,7 +3,7 @@
 num_prints=3
 use_ioat=1
 use_pmem=1
-numa_node=1 
+numa_node=0
 
 stat_file=$(mktemp)
 out_file=$(mktemp)
