@@ -193,6 +193,13 @@ void client_func() {
       printf("Client: size %zu, %.2f Gbps.\n", cur_write_size,
              total_bytes_written * 8 / (1000000000 * secs));
 
+      cur_write_size *= 2;
+      printf("doubling to %zu\n", cur_write_size);
+      if (cur_write_size > FLAGS_max_write_size) {
+        cur_write_size = FLAGS_min_write_size;
+        printf("back to %zu\n", cur_write_size);
+      }
+
       total_bytes_written = 0;
       clock_gettime(CLOCK_REALTIME, &start);
     }
