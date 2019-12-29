@@ -1,8 +1,6 @@
 exe="./bench"
 chmod +x $exe
 
-num_threads=1
-
 if [ "$#" -gt 1 ]; then
   blue "Illegal number of arguments."
   blue "Usage: ./run.sh, or ./run.sh gdb"
@@ -11,7 +9,7 @@ fi
 
 # Check for non-gdb mode
 if [ "$#" -eq 0 ]; then
-  sudo -E numactl --physcpubind=3 --membind=0 $exe --num_threads=$num_threads
+  sudo -E env numactl --physcpubind=3 --membind=0 $exe
 fi
 
 # Check for gdb mode

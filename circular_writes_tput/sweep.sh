@@ -1,12 +1,10 @@
-for kNumCounters in 1 2 3 4 5 8 16; do
-  for kStrideSize in 256 4096; do
+for num_counters in 1 2 3 4 5 8 16; do
+  for stride_size in 64 256; do
     rm config.h
     touch config.h
 
-    echo "static constexpr size_t kNumCounters = $kNumCounters;" >> config.h
-    echo "static constexpr size_t kStrideSize = $kStrideSize;" >> config.h
-
-    make
-    ./run.sh
+    sudo -E env numactl --physcpubind=3 --membind=0 ./bench \
+      --num_counters=$num_counters \
+      --stride_size=$stride_size
   done
 done
