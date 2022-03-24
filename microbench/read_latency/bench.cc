@@ -71,43 +71,6 @@ int main() {
            sum);
   }
 
-  // The measurement above uses implicit pointer chasing. We can instead use
-  // a shuffle to create an explicit pointer chain.
-
-  /*
-  auto *cl_arr = reinterpret_cast<cacheline_t *>(pbuf);
-  const size_t num_cl = kFileSizeBytes / sizeof(cacheline_t);
-  for (size_t i = 0; i < num_cl; i++) {
-    cl_arr[i].ptr = &cl_arr[i];
-  }
-
-  for (size_t i = num_cl - 1; i >= 1; i--) {
-    if (i % (128 * 1024) == 0) {
-      printf("shuffle progress (left) = %.2f\n", i * 1.0 / num_cl);
-    }
-    size_t j = fastrand(seed) % i;
-    cacheline_t *temp = cl_arr[j].ptr;
-    cl_arr[j].ptr = cl_arr[i].ptr;
-    cl_arr[i].ptr = temp;
-  }
-  cacheline_t *ptr = cl_arr[0].ptr;
-
-  for (size_t msr = 0; msr < 10; msr++) {
-    // Initialize measurement
-    struct timespec bench_start;
-    clock_gettime(CLOCK_REALTIME, &bench_start);
-
-    // Real work
-    for (size_t i = 0; i < kNumIters; i++) {
-      ptr = reinterpret_cast<cacheline_t *>((*ptr).ptr);
-    }
-
-    double bench_ns = ns_since(bench_start);
-    printf("Average read latency = %.1f ns, ptr = %p\n", bench_ns / kNumIters,
-           ptr);
-  }
-  */
-
   pmem_unmap(pbuf, mapped_len);
   exit(0);
 }
